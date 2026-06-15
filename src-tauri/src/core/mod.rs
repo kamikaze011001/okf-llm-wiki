@@ -5,3 +5,4 @@ pub mod provider;
 pub mod retrieval;
 pub mod fetch;
 pub mod digest;
+pub mod ask;
