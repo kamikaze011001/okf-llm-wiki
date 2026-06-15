@@ -131,7 +131,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn tmp() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("okf-{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("okf-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
