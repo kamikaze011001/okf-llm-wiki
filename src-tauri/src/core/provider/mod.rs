@@ -8,3 +8,4 @@ pub trait LlmProvider: Send + Sync {
 }
 
 pub mod fake;
+pub mod claude;
