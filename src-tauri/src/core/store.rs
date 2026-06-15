@@ -79,22 +79,25 @@ fn parse_frontmatter(raw: &str, rel: &str) -> Result<(Frontmatter, String)> {
         .strip_prefix("---\n")
         .with_context(|| format!("missing opening --- in {rel}"))?;
 
-    // Find the closing "---" on its own line
-    let close = without_leading
-        .find("\n---\n")
-        .with_context(|| format!("missing closing --- in {rel}"))?;
-
-    let yaml_section = &without_leading[..close];
-    // Content after the closing "---\n", skip optional blank line
-    let after_close = &without_leading[close + 5..]; // skip "\n---\n"
-    let body = after_close.strip_prefix('\n').unwrap_or(after_close).to_string();
-    // Remove trailing newline that write_page appends
-    let body = body.strip_suffix('\n').unwrap_or(&body).to_string();
-
-    let fm: Frontmatter = serde_yaml::from_str(yaml_section)
-        .with_context(|| format!("deserializing frontmatter in {rel}"))?;
-
-    Ok((fm, body))
+    // Locate the closing fence: "\n---\n" (followed by body) or "\n---" at EOF (no body).
+    if let Some(close) = without_leading.find("\n---\n") {
+        let yaml_section = &without_leading[..close];
+        // Content after the closing "---\n", skip optional blank line
+        let after_close = &without_leading[close + 5..]; // skip "\n---\n"
+        let body = after_close.strip_prefix('\n').unwrap_or(after_close);
+        // Remove trailing newline that write_page appends
+        let body = body.strip_suffix('\n').unwrap_or(body).to_string();
+        let fm: Frontmatter = serde_yaml::from_str(yaml_section)
+            .with_context(|| format!("deserializing frontmatter in {rel}"))?;
+        Ok((fm, body))
+    } else if let Some(yaml_section) = without_leading.strip_suffix("\n---") {
+        // Closing fence is at EOF with no trailing newline — body is empty.
+        let fm: Frontmatter = serde_yaml::from_str(yaml_section)
+            .with_context(|| format!("deserializing frontmatter in {rel}"))?;
+        Ok((fm, String::new()))
+    } else {
+        anyhow::bail!("missing closing --- in {rel}")
+    }
 }
 
 /// Recursively collect *.md files, skipping index.md and log.md.
@@ -102,8 +105,8 @@ fn collect_md_files(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec
     for entry in std::fs::read_dir(dir)
         .with_context(|| format!("reading dir {}", dir.display()))?
     {
-        let entry = entry?;
-        let ft = entry.file_type()?;
+        let entry = entry.with_context(|| format!("iterating {}", dir.display()))?;
+        let ft = entry.file_type().with_context(|| format!("iterating {}", dir.display()))?;
         let path = entry.path();
         if ft.is_dir() {
             collect_md_files(base, &path, out)?;
@@ -196,6 +199,20 @@ mod tests {
         assert!(content.contains("- first entry"), "log should contain first entry");
         assert!(content.contains("- second entry"), "log should contain second entry");
         assert_eq!(content.lines().count(), 2, "log should have exactly 2 lines");
+    }
+
+    #[test]
+    fn reads_page_without_trailing_newline() {
+        let root = tmp();
+        let store = OkfStore::new(root.clone());
+        let dir = root.join("concepts");
+        std::fs::create_dir_all(&dir).unwrap();
+        // File ends right after the closing `---`, no trailing newline, no body.
+        std::fs::write(dir.join("x.md"), "---\ntype: Concept\ntitle: X\n---").unwrap();
+        let page = store.read_page("concepts/x.md").unwrap();
+        assert_eq!(page.frontmatter.title, Some("X".into()));
+        assert_eq!(page.frontmatter.type_, "Concept");
+        assert!(page.body.trim().is_empty(), "body should be empty");
     }
 
     #[test]
