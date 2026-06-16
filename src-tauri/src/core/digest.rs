@@ -104,13 +104,11 @@ fn first_json_object(s: &str) -> Option<&str> {
 }
 
 fn now_iso() -> String {
-    // Minimal RFC3339-ish stamp without extra deps.
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    format!("unixtime:{secs}")
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
 
 #[cfg(test)]
@@ -164,5 +162,21 @@ mod tests {
     fn extract_json_handles_braces_inside_strings() {
         let raw = "noise {\"body\":\"a } b\",\"x\":1} trailing";
         assert_eq!(extract_json(raw), "{\"body\":\"a } b\",\"x\":1}");
+    }
+
+    #[test]
+    fn now_iso_is_rfc3339() {
+        let ts = now_iso();
+        // RFC-3339 looks like 2026-06-16T12:34:56...Z — 4-digit year then '-', 'T' at index 10.
+        assert_eq!(ts.as_bytes()[4], b'-', "expected YYYY- prefix, got {ts}");
+        assert_eq!(
+            ts.as_bytes()[10],
+            b'T',
+            "expected date/time 'T' separator, got {ts}"
+        );
+        assert!(
+            !ts.starts_with("unixtime"),
+            "should not be the old placeholder, got {ts}"
+        );
     }
 }
