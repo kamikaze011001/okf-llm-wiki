@@ -7,8 +7,6 @@ use std::sync::Mutex;
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub index: Mutex<Vec<IndexEntry>>,
-    /// Persists settings; unused until `set_settings` gains save-on-write (v1.1).
-    #[allow(dead_code)]
     pub config: ConfigStore,
 }
 
