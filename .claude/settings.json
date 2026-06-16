@@ -1,0 +1,61 @@
+{
+    "enabledPlugins": {
+        "shipwithai-starter@shipwithai": true
+    },
+    "permissions": {
+        "allow": [
+            "Bash(cargo build:*)",
+            "Bash(cargo test:*)",
+            "Bash(cargo check:*)",
+            "Bash(cargo clippy:*)",
+            "Bash(cargo fmt:*)",
+            "Bash(npm run:*)",
+            "Bash(npm test:*)",
+            "Bash(npm ci:*)",
+            "Bash(npm install:*)",
+            "Bash(npx vitest:*)",
+            "Bash(npx svelte-kit:*)",
+            "Bash(npx svelte-check:*)",
+            "Bash(git status:*)",
+            "Bash(git diff:*)",
+            "Bash(git log:*)",
+            "Bash(git show:*)",
+            "Bash(git add:*)",
+            "Bash(git commit:*)",
+            "Bash(git checkout:*)",
+            "Bash(git switch:*)",
+            "Bash(git branch:*)",
+            "Bash(git pull:*)",
+            "Bash(gh pr:*)",
+            "Bash(gh issue:*)"
+        ],
+        "deny": [
+            "Edit(.svelte-kit/**)",
+            "Write(.svelte-kit/**)",
+            "Edit(src-tauri/target/**)",
+            "Write(src-tauri/target/**)",
+            "Edit(build/**)",
+            "Write(build/**)"
+        ],
+        "ask": [
+            "Bash(git push:*)"
+        ]
+    },
+    "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "python3 -c \"import sys,json,os,subprocess;d=json.load(sys.stdin);p=(d.get('tool_input') or {}).get('file_path','');env=dict(os.environ);env['PATH']=os.path.expanduser('~/.cargo/bin')+os.pathsep+env.get('PATH','');p.endswith('.rs') and subprocess.run(['cargo','fmt'],cwd='src-tauri',env=env)\""
+                    },
+                    {
+                        "type": "command",
+                        "command": "python3 -c \"import sys,json,subprocess;d=json.load(sys.stdin);p=(d.get('tool_input') or {}).get('file_path','');p.endswith('.test.ts') and subprocess.run(['npx','vitest','related','--run',p])\""
+                    }
+                ]
+            }
+        ]
+    }
+}
