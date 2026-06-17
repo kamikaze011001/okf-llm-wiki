@@ -82,7 +82,9 @@ impl ConfigStore {
         };
         let json = serde_json::to_string_pretty(&persisted).context("serializing settings")?;
         let dest = self.dir.join(SETTINGS_FILE);
-        let tmp = dest.with_extension("json.tmp");
+        // Explicit `settings.json.tmp` in the same dir (not `with_extension`, which would
+        // mangle a compound filename) so the temp+rename stays atomic on one filesystem.
+        let tmp = self.dir.join(format!("{SETTINGS_FILE}.tmp"));
         std::fs::write(&tmp, &json).with_context(|| format!("writing {}", tmp.display()))?;
         std::fs::rename(&tmp, &dest).with_context(|| format!("renaming to {}", dest.display()))?;
 
@@ -101,16 +103,25 @@ impl ConfigStore {
     /// Load settings; any missing/corrupt piece degrades to empty rather than failing.
     pub fn load(&self) -> Settings {
         let dest = self.dir.join(SETTINGS_FILE);
-        let mut settings = std::fs::read_to_string(&dest)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<PersistedSettings>(&raw).ok())
-            .map(|p| Settings {
-                provider: p.provider,
-                model: p.model,
-                api_key: String::new(),
-                wiki_path: p.wiki_path,
-            })
-            .unwrap_or_default();
+        let mut settings = match std::fs::read_to_string(&dest) {
+            Ok(raw) => match serde_json::from_str::<PersistedSettings>(&raw) {
+                Ok(p) => Settings {
+                    provider: p.provider,
+                    model: p.model,
+                    api_key: String::new(),
+                    wiki_path: p.wiki_path,
+                },
+                // Present but corrupt: surface it so the user can self-diagnose
+                // (e.g. delete the file), then degrade to defaults. The file never
+                // holds the API key, so logging the parse error leaks no secret.
+                Err(e) => {
+                    eprintln!("okf: ignoring corrupt {}: {e}", dest.display());
+                    Settings::default()
+                }
+            },
+            // Missing file is the normal first-run case — no warning.
+            Err(_) => Settings::default(),
+        };
         settings.api_key = self.secrets.get(KEYCHAIN_ACCOUNT).unwrap_or_default();
         settings
     }

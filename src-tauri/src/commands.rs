@@ -29,6 +29,13 @@ pub fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
 }
 
+/// Persist settings, rebuild the index, then swap in-memory state.
+///
+/// Order is deliberate: `config.save()` runs first so a persistence failure leaves the
+/// in-memory `Settings` untouched (the command returns `Err`, the UI surfaces it). The
+/// index is then rebuilt from the new `wiki_path` before the in-memory swap; this is a
+/// synchronous single-user command, so the brief window where the index reflects the new
+/// path while `state.settings` is still stale is not observable by any concurrent reader.
 #[tauri::command]
 pub fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
     state.config.save(&settings).map_err(|e| e.to_string())?;

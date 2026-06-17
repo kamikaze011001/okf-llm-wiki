@@ -71,6 +71,12 @@ fn extract_json(raw: &str) -> &str {
 }
 
 /// Return the first balanced `{...}` span, ignoring braces inside JSON strings.
+///
+/// Known limitation: this scans from the *first* `{` in the input. If prose before the
+/// JSON contains a stray `{`, the span starts there and will likely be unbalanced or
+/// unparseable — `extract_json` then falls back to the raw string and `digest` surfaces
+/// the existing "did not return valid digest JSON" error. It cannot panic: the byte scan
+/// only matches ASCII `{`/`}`/`"`/`\`, which never collide with UTF-8 continuation bytes.
 fn first_json_object(s: &str) -> Option<&str> {
     let bytes = s.as_bytes();
     let start = s.find('{')?;
