@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-pub enum Source { Url(String), Text(String) }
+pub enum Source {
+    Url(String),
+    Text(String),
+}
 
 pub fn classify(input: &str) -> Source {
     let t = input.trim();
@@ -19,7 +22,9 @@ pub fn html_to_text(html: &str) -> String {
     let mut out = Vec::new();
     for el in doc.select(&sel) {
         let txt: String = el.text().collect::<Vec<_>>().join(" ").trim().to_string();
-        if !txt.is_empty() { out.push(txt); }
+        if !txt.is_empty() {
+            out.push(txt);
+        }
     }
     out.join("\n\n")
 }

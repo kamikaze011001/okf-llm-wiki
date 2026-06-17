@@ -1,6 +1,6 @@
-use crate::core::page::{Page, Frontmatter};
+use crate::core::page::{Frontmatter, Page};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
-use anyhow::{Result, Context};
 
 pub struct OkfStore {
     root: PathBuf,
@@ -19,8 +19,7 @@ impl OkfStore {
                 .with_context(|| format!("creating dirs for {}", dest.display()))?;
         }
 
-        let yaml = serde_yaml::to_string(&page.frontmatter)
-            .context("serializing frontmatter")?;
+        let yaml = serde_yaml::to_string(&page.frontmatter).context("serializing frontmatter")?;
         let content = format!("---\n{}---\n\n{}\n", yaml, page.body);
 
         // Atomic write: write to a temp file next to the destination, then rename.
@@ -65,8 +64,7 @@ impl OkfStore {
             .append(true)
             .open(&log_path)
             .with_context(|| format!("opening log.md at {}", log_path.display()))?;
-        writeln!(file, "- {}", entry)
-            .context("writing to log.md")?;
+        writeln!(file, "- {}", entry).context("writing to log.md")?;
         Ok(())
     }
 }
@@ -101,19 +99,24 @@ fn parse_frontmatter(raw: &str, rel: &str) -> Result<(Frontmatter, String)> {
 }
 
 /// Recursively collect *.md files, skipping index.md and log.md.
-fn collect_md_files(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("reading dir {}", dir.display()))?
-    {
+fn collect_md_files(
+    base: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<String>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading dir {}", dir.display()))? {
         let entry = entry.with_context(|| format!("iterating {}", dir.display()))?;
-        let ft = entry.file_type().with_context(|| format!("iterating {}", dir.display()))?;
+        let ft = entry
+            .file_type()
+            .with_context(|| format!("iterating {}", dir.display()))?;
         let path = entry.path();
         if ft.is_dir() {
             collect_md_files(base, &path, out)?;
         } else if ft.is_file() {
             if let Some(ext) = path.extension() {
                 if ext == "md" {
-                    let rel = path.strip_prefix(base)
+                    let rel = path
+                        .strip_prefix(base)
                         .unwrap()
                         .to_string_lossy()
                         .replace('\\', "/"); // normalise on Windows too
@@ -151,8 +154,11 @@ mod tests {
             frontmatter: Frontmatter {
                 type_: "Concept".into(),
                 title: Some("Vitamin D & Sleep".into()),
-                description: None, tags: vec!["sleep".into()],
-                resource: None, timestamp: None, note: Some("winter insomnia".into()),
+                description: None,
+                tags: vec!["sleep".into()],
+                resource: None,
+                timestamp: None,
+                note: Some("winter insomnia".into()),
                 extra: BTreeMap::new(),
             },
             body: "**TL;DR.** Take it in the morning.".into(),
@@ -173,8 +179,11 @@ mod tests {
             frontmatter: Frontmatter {
                 type_: "Concept".into(),
                 title: Some("Test Concept".into()),
-                description: None, tags: vec![],
-                resource: None, timestamp: None, note: None,
+                description: None,
+                tags: vec![],
+                resource: None,
+                timestamp: None,
+                note: None,
                 extra: BTreeMap::new(),
             },
             body: "Body text.".into(),
@@ -184,9 +193,18 @@ mod tests {
         std::fs::write(root.join("index.md"), "# Index\n").unwrap();
         std::fs::write(root.join("log.md"), "- entry\n").unwrap();
         let pages = store.list_pages().unwrap();
-        assert!(pages.contains(&"concepts/test-concept.md".to_string()), "should include concept page");
-        assert!(!pages.contains(&"index.md".to_string()), "should exclude index.md");
-        assert!(!pages.contains(&"log.md".to_string()), "should exclude log.md");
+        assert!(
+            pages.contains(&"concepts/test-concept.md".to_string()),
+            "should include concept page"
+        );
+        assert!(
+            !pages.contains(&"index.md".to_string()),
+            "should exclude index.md"
+        );
+        assert!(
+            !pages.contains(&"log.md".to_string()),
+            "should exclude log.md"
+        );
     }
 
     #[test]
@@ -196,9 +214,19 @@ mod tests {
         store.append_log("first entry").unwrap();
         store.append_log("second entry").unwrap();
         let content = std::fs::read_to_string(root.join("log.md")).unwrap();
-        assert!(content.contains("- first entry"), "log should contain first entry");
-        assert!(content.contains("- second entry"), "log should contain second entry");
-        assert_eq!(content.lines().count(), 2, "log should have exactly 2 lines");
+        assert!(
+            content.contains("- first entry"),
+            "log should contain first entry"
+        );
+        assert!(
+            content.contains("- second entry"),
+            "log should contain second entry"
+        );
+        assert_eq!(
+            content.lines().count(),
+            2,
+            "log should have exactly 2 lines"
+        );
     }
 
     #[test]
@@ -219,14 +247,20 @@ mod tests {
     fn extra_frontmatter_keys_survive_round_trip() {
         let store = OkfStore::new(tmp());
         let mut extra = BTreeMap::new();
-        extra.insert("okf_version".to_string(), serde_yaml::Value::String("0.1".into()));
+        extra.insert(
+            "okf_version".to_string(),
+            serde_yaml::Value::String("0.1".into()),
+        );
         let page = Page {
             path: "notes/extra-test.md".into(),
             frontmatter: Frontmatter {
                 type_: "Note".into(),
                 title: Some("Extra Test".into()),
-                description: None, tags: vec![],
-                resource: None, timestamp: None, note: None,
+                description: None,
+                tags: vec![],
+                resource: None,
+                timestamp: None,
+                note: None,
                 extra,
             },
             body: "body with extras".into(),
@@ -241,7 +275,9 @@ mod tests {
         // Second write->read to validate true double round-trip
         store.write_page(&read).unwrap();
         let read2 = store.read_page("notes/extra-test.md").unwrap();
-        assert_eq!(read2.frontmatter.extra.get("okf_version"),
-            Some(&serde_yaml::Value::String("0.1".into())));
+        assert_eq!(
+            read2.frontmatter.extra.get("okf_version"),
+            Some(&serde_yaml::Value::String("0.1".into()))
+        );
     }
 }

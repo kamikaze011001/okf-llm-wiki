@@ -4,7 +4,9 @@ use async_trait::async_trait;
 
 /// Deterministic provider for tests. `complete` returns `reply`;
 /// `embed` returns a tiny bag-of-chars vector so similar text scores higher.
-pub struct FakeProvider { pub reply: String }
+pub struct FakeProvider {
+    pub reply: String,
+}
 
 #[async_trait]
 impl LlmProvider for FakeProvider {
@@ -14,7 +16,9 @@ impl LlmProvider for FakeProvider {
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let mut v = vec![0f32; 26];
         for c in text.to_ascii_lowercase().chars() {
-            if c.is_ascii_lowercase() { v[(c as u8 - b'a') as usize] += 1.0; }
+            if c.is_ascii_lowercase() {
+                v[(c as u8 - b'a') as usize] += 1.0;
+            }
         }
         Ok(v)
     }

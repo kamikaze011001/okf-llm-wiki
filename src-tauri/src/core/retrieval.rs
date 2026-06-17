@@ -5,13 +5,22 @@ const DIM: usize = 256;
 pub fn hash_embed(text: &str) -> Vec<f32> {
     let mut v = vec![0f32; DIM];
     for word in text.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
-        if word.is_empty() { continue; }
+        if word.is_empty() {
+            continue;
+        }
         let mut h: u64 = 1469598103934665603;
-        for b in word.bytes() { h ^= b as u64; h = h.wrapping_mul(1099511628211); }
+        for b in word.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
         v[(h as usize) % DIM] += 1.0;
     }
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 { for x in &mut v { *x /= norm; } }
+    if norm > 0.0 {
+        for x in &mut v {
+            *x /= norm;
+        }
+    }
     v
 }
 
@@ -20,7 +29,11 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[derive(Clone)]
-pub struct IndexEntry { pub path: String, pub vector: Vec<f32>, pub snippet: String }
+pub struct IndexEntry {
+    pub path: String,
+    pub vector: Vec<f32>,
+    pub snippet: String,
+}
 
 pub fn search<'a>(query: &str, entries: &'a [IndexEntry], k: usize) -> Vec<&'a IndexEntry> {
     let q = hash_embed(query);
@@ -37,9 +50,17 @@ pub fn build_index(store: &OkfStore) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
     for path in store.list_pages()? {
         let page = store.read_page(&path)?;
-        let text = format!("{} {}", page.frontmatter.title.clone().unwrap_or_default(), page.body);
+        let text = format!(
+            "{} {}",
+            page.frontmatter.title.clone().unwrap_or_default(),
+            page.body
+        );
         let snippet: String = page.body.chars().take(160).collect();
-        entries.push(IndexEntry { path, vector: hash_embed(&text), snippet });
+        entries.push(IndexEntry {
+            path,
+            vector: hash_embed(&text),
+            snippet,
+        });
     }
     Ok(entries)
 }
@@ -50,8 +71,16 @@ mod tests {
     #[test]
     fn finds_most_relevant_page() {
         let entries = vec![
-            IndexEntry { path: "a.md".into(), vector: hash_embed("vitamin d sleep melatonin"), snippet: "".into() },
-            IndexEntry { path: "b.md".into(), vector: hash_embed("rust tauri desktop app"), snippet: "".into() },
+            IndexEntry {
+                path: "a.md".into(),
+                vector: hash_embed("vitamin d sleep melatonin"),
+                snippet: "".into(),
+            },
+            IndexEntry {
+                path: "b.md".into(),
+                vector: hash_embed("rust tauri desktop app"),
+                snippet: "".into(),
+            },
         ];
         let hits = search("how does vitamin d affect sleep", &entries, 1);
         assert_eq!(hits[0].path, "a.md");
@@ -69,7 +98,7 @@ mod tests {
 
     #[test]
     fn builds_index_from_store() {
-        use crate::core::page::{Page, Frontmatter};
+        use crate::core::page::{Frontmatter, Page};
         use std::collections::BTreeMap;
 
         let store = OkfStore::new(tmp());
