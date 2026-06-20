@@ -9,6 +9,8 @@
   let saving = false;
   let editError = "";
   let confirmingDelete = false;
+  let deleting = false;
+  let deleteError = "";
   // Edit form fields (seeded from `view` when entering edit mode).
   let editTitle = "";
   let editTags = "";
@@ -50,10 +52,18 @@
   }
   async function confirmDelete() {
     if (!view) return;
-    await deletePage(view.path);
-    pages = await listPages();
-    confirmingDelete = false;
-    currentPage.set(null);
+    deleting = true;
+    deleteError = "";
+    try {
+      await deletePage(view.path);
+      pages = await listPages();
+      currentPage.set(null);
+    } catch (e) {
+      deleteError = String(e);
+    } finally {
+      deleting = false;
+      confirmingDelete = false;
+    }
   }
   function cancelDelete() { confirmingDelete = false; }
 </script>
@@ -63,12 +73,13 @@
       <button class="nb-btn" on:click={startEdit}>Edit</button>
       {#if confirmingDelete}
         <span style="align-self:center">Confirm delete?</span>
-        <button class="nb-btn" style="background:#c0392b;color:#fff" on:click={confirmDelete}>Yes</button>
-        <button class="nb-btn" on:click={cancelDelete}>No</button>
+        <button class="nb-btn" style="background:#c0392b;color:#fff" on:click={confirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Yes"}</button>
+        <button class="nb-btn" on:click={cancelDelete} disabled={deleting}>No</button>
       {:else}
         <button class="nb-btn" on:click={() => (confirmingDelete = true)}>Delete</button>
       {/if}
     </div>
+    {#if deleteError}<div class="nb-card" style="background:#c0392b;color:#fff;margin:0 0 8px 0">{deleteError}</div>{/if}
     <span class="nb-chip" style="background:var(--pink);color:#fff">CONCEPT</span>
     <h1>{view.title}</h1>
     <div>{#each view.tags as t}<span class="nb-chip">#{t}</span>{/each}</div>
