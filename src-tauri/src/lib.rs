@@ -17,13 +17,15 @@ pub fn run() {
                 .path()
                 .app_config_dir()
                 .expect("resolving app config dir");
+            let index_path = crate::core::index_store::index_path(&dir);
             let config = ConfigStore::new(dir, Box::new(KeyringSecretStore::new()));
             let settings = config.load();
-            let index = initial_index(&settings.wiki_path);
+            let index = initial_index(&index_path);
             let links = initial_links(&settings.wiki_path);
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 index: Mutex::new(index),
+                index_path,
                 links: Mutex::new(links),
                 config,
             });

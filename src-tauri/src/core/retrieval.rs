@@ -1,3 +1,7 @@
+use crate::core::embed::Embedder;
+use crate::core::index_store::{flatten, Chunk, PersistedIndex};
+use anyhow::Result;
+
 const DIM: usize = 256;
 
 /// Deterministic local embedding: hashes word tokens into a fixed vector.
@@ -26,21 +30,6 @@ pub fn hash_embed(text: &str) -> Vec<f32> {
 
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
-#[derive(Clone)]
-pub struct IndexEntry {
-    pub path: String,
-    pub vector: Vec<f32>,
-    pub snippet: String,
-}
-
-pub fn search<'a>(query: &str, entries: &'a [IndexEntry], k: usize) -> Vec<&'a IndexEntry> {
-    let q = hash_embed(query);
-    let mut scored: Vec<(f32, &IndexEntry)> =
-        entries.iter().map(|e| (cosine(&q, &e.vector), e)).collect();
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-    scored.into_iter().take(k).map(|(_, e)| e).collect()
 }
 
 /// Target maximum size (in characters) for a single chunk.
@@ -104,18 +93,13 @@ fn split_paragraphs(body: &str) -> Vec<String> {
     paras
 }
 
-use crate::core::embed::Embedder;
-use crate::core::index_store::{flatten, Chunk, PersistedIndex};
-use crate::core::store::OkfStore;
-use anyhow::Result;
-
 /// Embed the query and return the top-`k` chunks by cosine similarity.
 ///
 /// Chunks whose stored vector dimension differs from the freshly embedded query
 /// (a stale index built by a different embedder) are skipped rather than scored —
 /// no panic, they simply don't match. Ties break by `(path, chunk_id)` for stable
 /// ordering.
-pub async fn search_index<'a>(
+pub async fn search<'a>(
     embedder: &dyn Embedder,
     query: &str,
     index: &'a PersistedIndex,
@@ -135,55 +119,9 @@ pub async fn search_index<'a>(
     Ok(scored.into_iter().take(k).map(|(_, c)| c).collect())
 }
 
-pub fn build_index(store: &OkfStore) -> Result<Vec<IndexEntry>> {
-    let mut entries = Vec::new();
-    for path in store.list_pages()? {
-        let page = store.read_page(&path)?;
-        let text = format!(
-            "{} {}",
-            page.frontmatter.title.clone().unwrap_or_default(),
-            page.body
-        );
-        let snippet: String = page.body.chars().take(160).collect();
-        entries.push(IndexEntry {
-            path,
-            vector: hash_embed(&text),
-            snippet,
-        });
-    }
-    Ok(entries)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn finds_most_relevant_page() {
-        let entries = vec![
-            IndexEntry {
-                path: "a.md".into(),
-                vector: hash_embed("vitamin d sleep melatonin"),
-                snippet: "".into(),
-            },
-            IndexEntry {
-                path: "b.md".into(),
-                vector: hash_embed("rust tauri desktop app"),
-                snippet: "".into(),
-            },
-        ];
-        let hits = search("how does vitamin d affect sleep", &entries, 1);
-        assert_eq!(hits[0].path, "a.md");
-    }
-
-    fn tmp() -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let d = std::env::temp_dir().join(format!("okf-ret-{}-{}", std::process::id(), n));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
 
     #[test]
     fn empty_body_yields_no_chunks() {
@@ -225,7 +163,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_index_ranks_by_cosine_and_skips_dim_mismatch() {
+    async fn search_ranks_by_cosine_and_skips_dim_mismatch() {
         use crate::core::embed::{Embedder, HashEmbedder};
         use crate::core::index_store::{Chunk, PageEntry, PersistedIndex};
 
@@ -271,7 +209,7 @@ mod tests {
             },
         );
 
-        let hits = search_index(&e, "vitamin d improves sleep", &idx, 2)
+        let hits = search(&e, "vitamin d improves sleep", &idx, 2)
             .await
             .unwrap();
         assert!(!hits.is_empty());
@@ -279,49 +217,5 @@ mod tests {
         assert_eq!(hits[0].chunk_id, 0);
         // the dim-mismatched "stale" chunk must never be returned
         assert!(hits.iter().all(|h| h.text != "stale"));
-    }
-
-    #[test]
-    fn builds_index_from_store() {
-        use crate::core::page::{Frontmatter, Page};
-        use std::collections::BTreeMap;
-
-        let store = OkfStore::new(tmp());
-
-        let page1 = Page {
-            path: "concepts/vitamin-d-sleep.md".into(),
-            frontmatter: Frontmatter {
-                type_: "Concept".into(),
-                title: Some("Vitamin D and Sleep".into()),
-                description: None,
-                tags: vec![],
-                resource: None,
-                timestamp: None,
-                note: None,
-                extra: BTreeMap::new(),
-            },
-            body: "Vitamin D affects melatonin and sleep quality.".into(),
-        };
-
-        let page2 = Page {
-            path: "concepts/rust-tauri.md".into(),
-            frontmatter: Frontmatter {
-                type_: "Concept".into(),
-                title: Some("Rust Tauri Desktop App".into()),
-                description: None,
-                tags: vec![],
-                resource: None,
-                timestamp: None,
-                note: None,
-                extra: BTreeMap::new(),
-            },
-            body: "Tauri is a framework for building desktop apps with Rust.".into(),
-        };
-
-        store.write_page(&page1).unwrap();
-        store.write_page(&page2).unwrap();
-
-        let index = build_index(&store).unwrap();
-        assert_eq!(index.len(), 2);
     }
 }
