@@ -1,5 +1,7 @@
 use crate::core::slug::slugify;
-use std::collections::HashSet;
+use crate::core::store::OkfStore;
+use anyhow::Result;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Link {
@@ -66,6 +68,27 @@ pub fn extract_links(body: &str) -> Vec<Link> {
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BacklinkRef {
+    pub path: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConceptRef {
+    pub slug: String,
+    pub title: String,
+}
+
+/// Resolved link graph for the whole wiki. Built from disk, held in memory.
+#[derive(Debug, Clone, Default)]
+pub struct LinkGraph {
+    slug_to_path: HashMap<String, String>,
+    slug_to_title: HashMap<String, String>,
+    /// target slug -> source page paths that link to it
+    backlinks: HashMap<String, Vec<String>>,
+}
+
 /// Rewrite the body so every `[[X]]` whose `slugify(X)` is not in `known` becomes plain `X`.
 /// Known links are re-emitted as `[[trimmed text]]`. Pure and deterministic.
 pub fn validate_links(body: &str, known: &HashSet<String>) -> String {
@@ -87,9 +110,190 @@ pub fn validate_links(body: &str, known: &HashSet<String>) -> String {
     out
 }
 
+/// Filename stem of a page path: `concepts/vitamin-d-sleep.md` -> `vitamin-d-sleep`.
+pub fn slug_of(path: &str) -> &str {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    file.strip_suffix(".md").unwrap_or(file)
+}
+
+impl LinkGraph {
+    pub fn path_for(&self, slug: &str) -> Option<&str> {
+        self.slug_to_path.get(slug).map(String::as_str)
+    }
+
+    pub fn exists(&self, slug: &str) -> bool {
+        self.slug_to_path.contains_key(slug)
+    }
+
+    /// Pages that link to `path`, resolved to `{path, title}`, sorted by path.
+    pub fn backlinks(&self, path: &str) -> Vec<BacklinkRef> {
+        let slug = slug_of(path);
+        let mut sources = self.backlinks.get(slug).cloned().unwrap_or_default();
+        sources.sort();
+        sources
+            .into_iter()
+            .map(|p| {
+                let s = slug_of(&p);
+                let title = self
+                    .slug_to_title
+                    .get(s)
+                    .cloned()
+                    .unwrap_or_else(|| s.to_string());
+                BacklinkRef { path: p, title }
+            })
+            .collect()
+    }
+}
+
+/// Read every page and build the slug->path/title maps plus the backlink index.
+/// Self-links and links to non-existent slugs produce no backlink.
+pub fn build_link_graph(store: &OkfStore) -> Result<LinkGraph> {
+    let mut graph = LinkGraph::default();
+    let paths = store.list_pages()?;
+
+    let mut bodies: Vec<(String, String)> = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let page = store.read_page(path)?;
+        let slug = slug_of(path).to_string();
+        let title = page
+            .frontmatter
+            .title
+            .clone()
+            .unwrap_or_else(|| slug.clone());
+        graph.slug_to_path.insert(slug.clone(), path.clone());
+        graph.slug_to_title.insert(slug, title);
+        bodies.push((path.clone(), page.body));
+    }
+
+    for (path, body) in &bodies {
+        let source_slug = slug_of(path);
+        let mut seen = HashSet::new();
+        for link in extract_links(body) {
+            if link.target_slug == source_slug {
+                continue; // self-link
+            }
+            if !graph.slug_to_path.contains_key(&link.target_slug) {
+                continue; // unresolved target
+            }
+            if seen.insert(link.target_slug.clone()) {
+                graph
+                    .backlinks
+                    .entry(link.target_slug.clone())
+                    .or_default()
+                    .push(path.clone());
+            }
+        }
+    }
+
+    Ok(graph)
+}
+
+/// Lightweight list of every existing concept (slug + title), for the digest allow-list.
+pub fn concept_refs(store: &OkfStore) -> Result<Vec<ConceptRef>> {
+    let mut refs = Vec::new();
+    for path in store.list_pages()? {
+        let page = store.read_page(&path)?;
+        let slug = slug_of(&path).to_string();
+        let title = page
+            .frontmatter
+            .title
+            .clone()
+            .unwrap_or_else(|| slug.clone());
+        refs.push(ConceptRef { slug, title });
+    }
+    Ok(refs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::page::{Frontmatter, Page};
+    use crate::core::store::OkfStore;
+    use std::collections::BTreeMap;
+
+    fn tmp() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("okf-links-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn page(path: &str, title: &str, body: &str) -> Page {
+        Page {
+            path: path.into(),
+            frontmatter: Frontmatter {
+                type_: "Concept".into(),
+                title: Some(title.into()),
+                description: None,
+                tags: vec![],
+                resource: None,
+                timestamp: None,
+                note: None,
+                extra: BTreeMap::new(),
+            },
+            body: body.into(),
+        }
+    }
+
+    #[test]
+    fn slug_of_strips_dir_and_extension() {
+        assert_eq!(slug_of("concepts/vitamin-d-sleep.md"), "vitamin-d-sleep");
+        assert_eq!(slug_of("alpha.md"), "alpha");
+    }
+
+    #[test]
+    fn backlinks_resolve_and_exclude_self() {
+        let store = OkfStore::new(tmp());
+        store
+            .write_page(&page(
+                "concepts/alpha.md",
+                "Alpha",
+                "I mention [[Alpha]] myself.",
+            ))
+            .unwrap();
+        store
+            .write_page(&page(
+                "concepts/beta.md",
+                "Beta",
+                "Beta links to [[Alpha]] and [[Ghost]].",
+            ))
+            .unwrap();
+        let graph = build_link_graph(&store).unwrap();
+
+        assert!(graph.exists("alpha"));
+        assert_eq!(graph.path_for("alpha"), Some("concepts/alpha.md"));
+        assert!(!graph.exists("ghost"));
+
+        let back = graph.backlinks("concepts/alpha.md");
+        // Beta links Alpha; Alpha's self-link is excluded; Ghost is unresolved.
+        assert_eq!(
+            back,
+            vec![BacklinkRef {
+                path: "concepts/beta.md".into(),
+                title: "Beta".into()
+            }]
+        );
+        assert!(graph.backlinks("concepts/beta.md").is_empty());
+    }
+
+    #[test]
+    fn concept_refs_lists_slug_and_title() {
+        let store = OkfStore::new(tmp());
+        store
+            .write_page(&page("concepts/alpha.md", "Alpha", "body"))
+            .unwrap();
+        let refs = concept_refs(&store).unwrap();
+        assert_eq!(
+            refs,
+            vec![ConceptRef {
+                slug: "alpha".into(),
+                title: "Alpha".into()
+            }]
+        );
+    }
 
     #[test]
     fn segments_text_and_links_in_order() {
