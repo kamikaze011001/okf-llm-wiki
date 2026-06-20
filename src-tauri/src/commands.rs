@@ -2,6 +2,7 @@ use crate::core::{
     ask::ask,
     digest::digest,
     fetch::fetch_clean,
+    links::{build_link_graph, segment_body, Segment},
     retrieval::build_index,
     settings::{make_provider, Settings},
     store::OkfStore,
@@ -18,6 +19,31 @@ pub struct PageDto {
     pub tags: Vec<String>,
     pub note: Option<String>,
     pub resource: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SegmentDto {
+    pub kind: String, // "text" | "link"
+    pub text: String,
+    pub target_path: Option<String>,
+    pub exists: bool,
+}
+
+#[derive(Serialize)]
+pub struct RefDto {
+    pub path: String,
+    pub title: String,
+}
+
+#[derive(Serialize)]
+pub struct PageViewDto {
+    pub path: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub note: Option<String>,
+    pub resource: Option<String>,
+    pub segments: Vec<SegmentDto>,
+    pub backlinks: Vec<RefDto>,
 }
 
 fn store(state: &State<AppState>) -> OkfStore {
@@ -40,6 +66,7 @@ pub fn get_settings(state: State<AppState>) -> Settings {
 pub fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
     state.config.save(&settings).map_err(|e| e.to_string())?;
     *state.index.lock().unwrap() = crate::state::initial_index(&settings.wiki_path);
+    *state.links.lock().unwrap() = crate::state::initial_links(&settings.wiki_path);
     *state.settings.lock().unwrap() = settings;
     Ok(())
 }
@@ -62,6 +89,52 @@ pub fn list_pages(state: State<AppState>) -> Result<Vec<PageDto>, String> {
     Ok(out)
 }
 
+/// Return a page with its body pre-segmented into text/link runs and its backlinks resolved.
+#[tauri::command]
+pub fn get_page_view(state: State<AppState>, path: String) -> Result<PageViewDto, String> {
+    let s = store(&state);
+    let page = s.read_page(&path).map_err(|e| e.to_string())?;
+    let graph = state.links.lock().unwrap();
+    let segments = segment_body(&page.body)
+        .into_iter()
+        .map(|seg| match seg {
+            Segment::Text(t) => SegmentDto {
+                kind: "text".into(),
+                text: t,
+                target_path: None,
+                exists: false,
+            },
+            Segment::Link { text, target_slug } => {
+                let target_path = graph.path_for(&target_slug).map(|s| s.to_string());
+                let exists = target_path.is_some();
+                SegmentDto {
+                    kind: "link".into(),
+                    text,
+                    target_path,
+                    exists,
+                }
+            }
+        })
+        .collect();
+    let backlinks = graph
+        .backlinks(&path)
+        .into_iter()
+        .map(|b| RefDto {
+            path: b.path,
+            title: b.title,
+        })
+        .collect();
+    Ok(PageViewDto {
+        path: page.path,
+        title: page.frontmatter.title.unwrap_or_default(),
+        tags: page.frontmatter.tags,
+        note: page.frontmatter.note,
+        resource: page.frontmatter.resource,
+        segments,
+        backlinks,
+    })
+}
+
 #[tauri::command]
 pub async fn submit_source(
     state: State<'_, AppState>,
@@ -72,11 +145,14 @@ pub async fn submit_source(
     let provider = make_provider(&settings).map_err(|e| e.to_string())?;
     let clean = fetch_clean(&input).await.map_err(|e| e.to_string())?;
     let resource = input.starts_with("http").then(|| input.clone());
+    let existing = crate::core::links::concept_refs(&OkfStore::new(settings.wiki_path.clone()))
+        .map_err(|e| e.to_string())?;
     let r = digest(
         provider.as_ref(),
         &clean,
         resource.as_deref(),
         note.as_deref(),
+        &existing,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -84,6 +160,7 @@ pub async fn submit_source(
     s.write_page(&r.page).map_err(|e| e.to_string())?;
     s.append_log(&r.log_entry).map_err(|e| e.to_string())?;
     *state.index.lock().unwrap() = build_index(&s).map_err(|e| e.to_string())?;
+    *state.links.lock().unwrap() = build_link_graph(&s).map_err(|e| e.to_string())?;
     Ok(PageDto {
         path: r.page.path,
         title: r.page.frontmatter.title.unwrap_or_default(),

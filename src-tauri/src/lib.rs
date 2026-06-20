@@ -3,7 +3,7 @@ pub mod core;
 mod state;
 
 use crate::core::config::{ConfigStore, KeyringSecretStore};
-use crate::state::{initial_index, AppState};
+use crate::state::{initial_index, initial_links, AppState};
 use std::sync::Mutex;
 use tauri::Manager;
 
@@ -20,9 +20,11 @@ pub fn run() {
             let config = ConfigStore::new(dir, Box::new(KeyringSecretStore::new()));
             let settings = config.load();
             let index = initial_index(&settings.wiki_path);
+            let links = initial_links(&settings.wiki_path);
             app.manage(AppState {
                 settings: Mutex::new(settings),
                 index: Mutex::new(index),
+                links: Mutex::new(links),
                 config,
             });
             Ok(())
@@ -31,6 +33,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::list_pages,
+            commands::get_page_view,
             commands::submit_source,
             commands::ask_question
         ])
