@@ -1,6 +1,7 @@
 pub mod ask;
 pub mod config;
 pub mod digest;
+pub mod embed;
 pub mod fetch;
 pub mod links;
 pub mod page;
