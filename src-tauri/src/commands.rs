@@ -72,11 +72,14 @@ pub async fn submit_source(
     let provider = make_provider(&settings).map_err(|e| e.to_string())?;
     let clean = fetch_clean(&input).await.map_err(|e| e.to_string())?;
     let resource = input.starts_with("http").then(|| input.clone());
+    let existing = crate::core::links::concept_refs(&OkfStore::new(settings.wiki_path.clone()))
+        .map_err(|e| e.to_string())?;
     let r = digest(
         provider.as_ref(),
         &clean,
         resource.as_deref(),
         note.as_deref(),
+        &existing,
     )
     .await
     .map_err(|e| e.to_string())?;

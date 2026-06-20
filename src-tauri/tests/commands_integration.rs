@@ -24,9 +24,15 @@ async fn full_loop_digest_then_ask() {
     let dp = FakeProvider {
         reply: reply.into(),
     };
-    let r = digest(&dp, "source about sleep", Some("https://x"), Some("note"))
-        .await
-        .unwrap();
+    let r = digest(
+        &dp,
+        "source about sleep",
+        Some("https://x"),
+        Some("note"),
+        &[],
+    )
+    .await
+    .unwrap();
     store.write_page(&r.page).unwrap();
     store.append_log(&r.log_entry).unwrap();
 

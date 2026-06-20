@@ -1,9 +1,10 @@
+use crate::core::links::{validate_links, ConceptRef};
 use crate::core::page::{Frontmatter, Page};
 use crate::core::provider::LlmProvider;
 use crate::core::slug::slugify;
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// JSON contract the LLM must return.
 #[derive(Deserialize)]
@@ -19,23 +20,45 @@ pub struct DigestResult {
     pub log_entry: String,
 }
 
+/// Build the system prompt, adding an allow-list + linking instruction when concepts exist.
+fn build_system_prompt(existing: &[ConceptRef]) -> String {
+    let mut system = String::from(
+        "You write one OKF wiki page from a source. \
+        Respond ONLY with JSON: {\"title\":..,\"description\":..,\"tags\":[..],\"body\":..}. \
+        The body is Markdown beginning with a bold TL;DR line, then '## Key points'.",
+    );
+    if !existing.is_empty() {
+        system.push_str(
+            " When the body mentions any of these existing concepts by name, wrap that \
+            mention in [[double brackets]]. Use ONLY these exact titles: ",
+        );
+        let titles: Vec<&str> = existing.iter().map(|c| c.title.as_str()).collect();
+        system.push_str(&titles.join(", "));
+        system.push('.');
+    }
+    system
+}
+
 pub async fn digest(
     provider: &dyn LlmProvider,
     source_text: &str,
     resource: Option<&str>,
     note: Option<&str>,
+    existing: &[ConceptRef],
 ) -> Result<DigestResult> {
-    let system = "You write one OKF wiki page from a source. \
-        Respond ONLY with JSON: {\"title\":..,\"description\":..,\"tags\":[..],\"body\":..}. \
-        The body is Markdown beginning with a bold TL;DR line, then '## Key points'.";
+    let system = build_system_prompt(existing);
     let user = format!(
         "SOURCE:\n{source_text}\n\nUSER NOTE: {}",
         note.unwrap_or("")
     );
-    let raw = provider.complete(system, &user).await?;
+    let raw = provider.complete(&system, &user).await?;
     let parsed: DigestJson = serde_json::from_str(extract_json(&raw))
         .map_err(|e| anyhow!("LLM did not return valid digest JSON: {e}; got: {raw}"))?;
     let slug = slugify(&parsed.title);
+    // Keep only links to existing concepts or this page itself; drop hallucinated ones.
+    let mut known: HashSet<String> = existing.iter().map(|c| c.slug.clone()).collect();
+    known.insert(slug.clone());
+    let body = validate_links(&parsed.body, &known);
     let page = Page {
         path: format!("concepts/{slug}.md"),
         frontmatter: Frontmatter {
@@ -48,7 +71,7 @@ pub async fn digest(
             note: note.map(|s| s.to_string()),
             extra: BTreeMap::new(),
         },
-        body: parsed.body,
+        body,
     };
     Ok(DigestResult {
         log_entry: format!("Added page: {}", parsed.title),
@@ -120,14 +143,55 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::links::ConceptRef;
     use crate::core::provider::fake::FakeProvider;
+
+    #[test]
+    fn system_prompt_lists_existing_titles_with_link_instruction() {
+        let existing = vec![
+            ConceptRef {
+                slug: "alpha".into(),
+                title: "Alpha".into(),
+            },
+            ConceptRef {
+                slug: "beta".into(),
+                title: "Beta".into(),
+            },
+        ];
+        let p = build_system_prompt(&existing);
+        assert!(p.contains("Alpha"));
+        assert!(p.contains("Beta"));
+        assert!(p.contains("[[double brackets]]"));
+    }
+
+    #[test]
+    fn system_prompt_has_no_link_instruction_when_empty() {
+        let p = build_system_prompt(&[]);
+        assert!(!p.contains("[[double brackets]]"));
+    }
+
+    #[tokio::test]
+    async fn drops_hallucinated_links_keeps_valid_ones() {
+        let reply = r#"{"title":"Sleep Hygiene","description":"d","tags":[],"body":"See [[Vitamin D & Sleep]] and [[Nonexistent Concept]]."}"#;
+        let p = FakeProvider {
+            reply: reply.into(),
+        };
+        let existing = vec![ConceptRef {
+            slug: "vitamin-d-sleep".into(),
+            title: "Vitamin D & Sleep".into(),
+        }];
+        let r = digest(&p, "src", None, None, &existing).await.unwrap();
+        assert!(r.page.body.contains("[[Vitamin D & Sleep]]"));
+        assert!(!r.page.body.contains("[[Nonexistent Concept]]"));
+        assert!(r.page.body.contains("Nonexistent Concept"));
+    }
     #[tokio::test]
     async fn produces_concept_page_from_llm_json() {
         let reply = r#"{"title":"Vitamin D & Sleep","description":"d","tags":["sleep"],"body":"**TL;DR.** morning."}"#;
         let p = FakeProvider {
             reply: reply.into(),
         };
-        let r = digest(&p, "some source", Some("https://x"), Some("winter"))
+        let r = digest(&p, "some source", Some("https://x"), Some("winter"), &[])
             .await
             .unwrap();
         assert_eq!(r.page.path, "concepts/vitamin-d-sleep.md");
@@ -141,7 +205,7 @@ mod tests {
         let p = FakeProvider {
             reply: "not json".into(),
         };
-        assert!(digest(&p, "some source", None, None).await.is_err());
+        assert!(digest(&p, "some source", None, None, &[]).await.is_err());
     }
 
     #[tokio::test]
@@ -150,7 +214,7 @@ mod tests {
         let p = FakeProvider {
             reply: reply.into(),
         };
-        let r = digest(&p, "src", None, None).await.unwrap();
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
         assert_eq!(r.page.frontmatter.title, Some("T".into()));
     }
 
@@ -160,7 +224,7 @@ mod tests {
         let p = FakeProvider {
             reply: reply.into(),
         };
-        let r = digest(&p, "src", None, None).await.unwrap();
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
         assert_eq!(r.page.frontmatter.title, Some("P".into()));
     }
 
