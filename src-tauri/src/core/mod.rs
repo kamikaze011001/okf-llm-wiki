@@ -1,6 +1,7 @@
 pub mod ask;
 pub mod config;
 pub mod digest;
+pub mod edit;
 pub mod embed;
 pub mod fetch;
 pub mod index_store;
