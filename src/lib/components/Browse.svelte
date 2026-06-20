@@ -1,24 +1,74 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listPages, getPageView, type PageDto, type PageView } from "$lib/api";
+  import { listPages, getPageView, updatePage, deletePage, type PageDto, type PageView } from "$lib/api";
   import { currentPage } from "$lib/stores";
   let pages: PageDto[] = [];
   let view: PageView | undefined;
   let mounted = false;
+  let mode: "view" | "edit" = "view";
+  let saving = false;
+  let editError = "";
+  let confirmingDelete = false;
+  // Edit form fields (seeded from `view` when entering edit mode).
+  let editTitle = "";
+  let editTags = "";
+  let editNote = "";
+  let editBody = "";
   onMount(async () => { pages = await listPages(); mounted = true; });
-  // Derive the path to show from the selected page (or the first page as fallback),
-  // then load it once the page list is available. Referencing the store + `pages`
-  // here is what makes Svelte re-run these statements when either changes.
   $: selectedPath = $currentPage ?? pages[0]?.path ?? null;
   $: if (mounted) loadFor(selectedPath);
   async function loadFor(path: string | null) {
     if (!path) { view = undefined; return; }
     view = await getPageView(path);
+    mode = "view";
+    confirmingDelete = false;
   }
   function go(path: string) { currentPage.set(path); }
+  function startEdit() {
+    if (!view) return;
+    editTitle = view.title;
+    editTags = view.tags.join(", ");
+    editNote = view.note ?? "";
+    editBody = view.body;
+    editError = "";
+    mode = "edit";
+  }
+  async function saveEdit() {
+    if (!view) return;
+    saving = true;
+    editError = "";
+    try {
+      const tags = editTags.split(",").map((t) => t.trim()).filter((t) => t.length > 0);
+      await updatePage(view.path, editTitle || undefined, tags, editNote || undefined, editBody);
+      view = await getPageView(view.path);
+      mode = "view";
+    } catch (e) {
+      editError = String(e);
+    } finally {
+      saving = false;
+    }
+  }
+  async function confirmDelete() {
+    if (!view) return;
+    await deletePage(view.path);
+    pages = await listPages();
+    confirmingDelete = false;
+    currentPage.set(null);
+  }
+  function cancelDelete() { confirmingDelete = false; }
 </script>
 <section style="padding:32px;max-width:760px;margin:0 auto">
-  {#if view}
+  {#if view && mode === "view"}
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:8px">
+      <button class="nb-btn" on:click={startEdit}>Edit</button>
+      {#if confirmingDelete}
+        <span style="align-self:center">Confirm delete?</span>
+        <button class="nb-btn" style="background:#c0392b;color:#fff" on:click={confirmDelete}>Yes</button>
+        <button class="nb-btn" on:click={cancelDelete}>No</button>
+      {:else}
+        <button class="nb-btn" on:click={() => (confirmingDelete = true)}>Delete</button>
+      {/if}
+    </div>
     <span class="nb-chip" style="background:var(--pink);color:#fff">CONCEPT</span>
     <h1>{view.title}</h1>
     <div>{#each view.tags as t}<span class="nb-chip">#{t}</span>{/each}</div>
@@ -33,6 +83,17 @@
         </ul>
       </div>
     {/if}
+  {:else if view && mode === "edit"}
+    <h2>Edit page</h2>
+    {#if editError}<div class="nb-card" style="background:#c0392b;color:#fff;margin:8px 0">{editError}</div>{/if}
+    <label style="display:block;margin-top:8px">Title<br /><input class="nb-input" style="width:100%" bind:value={editTitle} /></label>
+    <label style="display:block;margin-top:8px">Tags (comma-separated)<br /><input class="nb-input" style="width:100%" bind:value={editTags} /></label>
+    <label style="display:block;margin-top:8px">Note<br /><input class="nb-input" style="width:100%" bind:value={editNote} /></label>
+    <label style="display:block;margin-top:8px">Body (Markdown)<br /><textarea class="nb-input" style="width:100%;min-height:240px;font-family:monospace" bind:value={editBody}></textarea></label>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="nb-btn" on:click={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+      <button class="nb-btn" on:click={() => (mode = "view")} disabled={saving}>Cancel</button>
+    </div>
   {:else}
     <p>No pages yet — capture something from Home.</p>
   {/if}
