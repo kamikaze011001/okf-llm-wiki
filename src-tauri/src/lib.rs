@@ -33,6 +33,7 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::list_pages,
+            commands::get_page_view,
             commands::submit_source,
             commands::ask_question
         ])

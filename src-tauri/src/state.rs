@@ -8,7 +8,6 @@ use std::sync::Mutex;
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub index: Mutex<Vec<IndexEntry>>,
-    #[allow(dead_code)] // used by upcoming link-graph commands
     pub links: Mutex<LinkGraph>,
     pub config: ConfigStore,
 }
