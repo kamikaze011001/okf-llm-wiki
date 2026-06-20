@@ -104,8 +104,36 @@ fn split_paragraphs(body: &str) -> Vec<String> {
     paras
 }
 
+use crate::core::embed::Embedder;
+use crate::core::index_store::{flatten, Chunk, PersistedIndex};
 use crate::core::store::OkfStore;
 use anyhow::Result;
+
+/// Embed the query and return the top-`k` chunks by cosine similarity.
+///
+/// Chunks whose stored vector dimension differs from the freshly embedded query
+/// (a stale index built by a different embedder) are skipped rather than scored —
+/// no panic, they simply don't match. Ties break by `(path, chunk_id)` for stable
+/// ordering.
+pub async fn search_index<'a>(
+    embedder: &dyn Embedder,
+    query: &str,
+    index: &'a PersistedIndex,
+    k: usize,
+) -> Result<Vec<&'a Chunk>> {
+    let q = embedder.embed(query).await?;
+    let mut scored: Vec<(f32, &Chunk)> = flatten(index)
+        .into_iter()
+        .filter(|c| c.vector.len() == q.len())
+        .map(|c| (cosine(&q, &c.vector), c))
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| (a.1.path.as_str(), a.1.chunk_id).cmp(&(b.1.path.as_str(), b.1.chunk_id)))
+    });
+    Ok(scored.into_iter().take(k).map(|(_, c)| c).collect())
+}
 
 pub fn build_index(store: &OkfStore) -> Result<Vec<IndexEntry>> {
     let mut entries = Vec::new();
@@ -194,6 +222,63 @@ mod tests {
         let chunks = chunk_body(body);
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].contains("## Section"));
+    }
+
+    #[tokio::test]
+    async fn search_index_ranks_by_cosine_and_skips_dim_mismatch() {
+        use crate::core::embed::{Embedder, HashEmbedder};
+        use crate::core::index_store::{Chunk, PageEntry, PersistedIndex};
+
+        let e = HashEmbedder;
+        let mut idx = PersistedIndex {
+            embedder_id: e.id(),
+            ..Default::default()
+        };
+        // relevant chunk: embed the same phrase we will query
+        let good = hash_embed("vitamin d improves sleep");
+        // a stale chunk with the WRONG dimension must be skipped, not panic
+        let stale = vec![0.5f32; 8];
+        idx.pages.insert(
+            "concepts/vd.md".into(),
+            PageEntry {
+                content_hash: 1,
+                chunks: vec![
+                    Chunk {
+                        path: "concepts/vd.md".into(),
+                        chunk_id: 0,
+                        text: "vitamin d improves sleep".into(),
+                        vector: good,
+                    },
+                    Chunk {
+                        path: "concepts/vd.md".into(),
+                        chunk_id: 1,
+                        text: "stale".into(),
+                        vector: stale,
+                    },
+                ],
+            },
+        );
+        idx.pages.insert(
+            "concepts/rust.md".into(),
+            PageEntry {
+                content_hash: 1,
+                chunks: vec![Chunk {
+                    path: "concepts/rust.md".into(),
+                    chunk_id: 0,
+                    text: "rust tauri desktop".into(),
+                    vector: hash_embed("rust tauri desktop"),
+                }],
+            },
+        );
+
+        let hits = search_index(&e, "vitamin d improves sleep", &idx, 2)
+            .await
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].path, "concepts/vd.md");
+        assert_eq!(hits[0].chunk_id, 0);
+        // the dim-mismatched "stale" chunk must never be returned
+        assert!(hits.iter().all(|h| h.text != "stale"));
     }
 
     #[test]
