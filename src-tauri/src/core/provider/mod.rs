@@ -7,5 +7,5 @@ pub trait LlmProvider: Send + Sync {
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
 }
 
-pub mod fake;
 pub mod claude;
+pub mod fake;

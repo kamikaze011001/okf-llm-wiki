@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (_cmd, args) => ({ echoed: args })) }));
-import { listPages, submitSource } from "./api";
+import { listPages, submitSource, setSettings } from "./api";
+import { invoke } from "@tauri-apps/api/core";
 
 describe("api", () => {
   it("submitSource passes input and note", async () => {
@@ -9,5 +10,11 @@ describe("api", () => {
   });
   it("listPages calls through", async () => {
     await expect(listPages()).resolves.toBeDefined();
+  });
+  it("setSettings rejects when the backend errors", async () => {
+    (invoke as any).mockRejectedValueOnce("keychain failure");
+    await expect(
+      setSettings({ provider: "claude", model: "m", api_key: "k", wiki_path: "/w" })
+    ).rejects.toBe("keychain failure");
   });
 });

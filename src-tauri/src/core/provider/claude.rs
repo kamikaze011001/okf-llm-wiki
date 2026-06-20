@@ -1,17 +1,21 @@
 use super::LlmProvider;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
 pub struct ClaudeProvider {
     pub api_key: String,
-    pub model: String,       // e.g. "claude-opus-4-8"
+    pub model: String, // e.g. "claude-opus-4-8"
     pub client: reqwest::Client,
 }
 
 impl ClaudeProvider {
     pub fn new(api_key: String, model: String) -> Self {
-        Self { api_key, model, client: reqwest::Client::new() }
+        Self {
+            api_key,
+            model,
+            client: reqwest::Client::new(),
+        }
     }
     pub(crate) fn messages_body(&self, system: &str, user: &str) -> Value {
         json!({
@@ -26,16 +30,25 @@ impl ClaudeProvider {
 #[async_trait]
 impl LlmProvider for ClaudeProvider {
     async fn complete(&self, system: &str, user: &str) -> Result<String> {
-        let resp = self.client.post("https://api.anthropic.com/v1/messages")
+        let resp = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&self.messages_body(system, user))
-            .send().await?;
+            .send()
+            .await?;
         if !resp.status().is_success() {
-            return Err(anyhow!("Claude API error {}: {}", resp.status(), resp.text().await.unwrap_or_default()));
+            return Err(anyhow!(
+                "Claude API error {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            ));
         }
         let v: Value = resp.json().await?;
-        v["content"][0]["text"].as_str().map(|s| s.to_string())
+        v["content"][0]["text"]
+            .as_str()
+            .map(|s| s.to_string())
             .ok_or_else(|| anyhow!("unexpected Claude response shape"))
     }
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {

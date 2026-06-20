@@ -29,4 +29,6 @@ gray_matter = "0.2"
 scraper = "0.20"
 async-trait = "0.1"
 anyhow = "1"
+keyring = { version = "3", features = ["apple-native"] }
+time = { version = "0.3", features = ["formatting"] }
 tauri-plugin-notification = "2.3.3"

@@ -1,16 +1,38 @@
+mod commands;
 pub mod core;
 mod state;
-mod commands;
+
+use crate::core::config::{ConfigStore, KeyringSecretStore};
+use crate::state::{initial_index, AppState};
+use std::sync::Mutex;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .manage(state::AppState::default())
+        .setup(|app| {
+            let dir = app
+                .path()
+                .app_config_dir()
+                .expect("resolving app config dir");
+            let config = ConfigStore::new(dir, Box::new(KeyringSecretStore::new()));
+            let settings = config.load();
+            let index = initial_index(&settings.wiki_path);
+            app.manage(AppState {
+                settings: Mutex::new(settings),
+                index: Mutex::new(index),
+                config,
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
-            commands::get_settings, commands::set_settings, commands::list_pages,
-            commands::submit_source, commands::ask_question
+            commands::get_settings,
+            commands::set_settings,
+            commands::list_pages,
+            commands::submit_source,
+            commands::ask_question
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

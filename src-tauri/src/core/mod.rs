@@ -1,9 +1,10 @@
-pub mod slug;
+pub mod ask;
+pub mod config;
+pub mod digest;
+pub mod fetch;
 pub mod page;
-pub mod store;
 pub mod provider;
 pub mod retrieval;
-pub mod fetch;
-pub mod digest;
-pub mod ask;
 pub mod settings;
+pub mod slug;
+pub mod store;
