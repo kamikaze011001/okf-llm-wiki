@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listPages, getPageView, updatePage, deletePage, type PageDto, type PageView } from "$lib/api";
+  import { listPages, getPageView, updatePage, deletePage, createPage, type PageDto, type PageView } from "$lib/api";
   import { currentPage } from "$lib/stores";
   let pages: PageDto[] = [];
   let view: PageView | undefined;
@@ -11,6 +11,9 @@
   let confirmingDelete = false;
   let deleting = false;
   let deleteError = "";
+  let creating = false;
+  let createError = "";
+  let pendingEdit = false;
   // Edit form fields (seeded from `view` when entering edit mode).
   let editTitle = "";
   let editTags = "";
@@ -25,6 +28,8 @@
     mode = "view";
     confirmingDelete = false;
     deleteError = "";
+    createError = "";
+    if (pendingEdit) { pendingEdit = false; startEdit(); }
   }
   function go(path: string) { currentPage.set(path); }
   function startEdit() {
@@ -67,6 +72,19 @@
     }
   }
   function cancelDelete() { confirmingDelete = false; }
+  async function createFromLink(title: string) {
+    creating = true;
+    createError = "";
+    try {
+      const p = await createPage(title);
+      pages = await listPages();
+      pendingEdit = true;
+      currentPage.set(p.path);
+    } catch (e) {
+      createError = String(e);
+      creating = false;
+    }
+  }
 </script>
 <section style="padding:32px;max-width:760px;margin:0 auto">
   {#if view && mode === "view"}
@@ -81,11 +99,12 @@
       {/if}
     </div>
     {#if deleteError}<div class="nb-card" style="background:#c0392b;color:#fff;margin:0 0 8px 0">{deleteError}</div>{/if}
+    {#if createError}<div class="nb-card" style="background:#c0392b;color:#fff;margin:0 0 8px 0">{createError}</div>{/if}
     <span class="nb-chip" style="background:var(--pink);color:#fff">CONCEPT</span>
     <h1>{view.title}</h1>
     <div>{#each view.tags as t}<span class="nb-chip">#{t}</span>{/each}</div>
     {#if view.note}<div class="nb-card" style="background:var(--yellow);margin:12px 0"><strong>★ Your note:</strong> {view.note}</div>{/if}
-    <article class="nb-card" style="margin-top:12px;white-space:pre-wrap">{#each view.segments as seg}{#if seg.kind === "link" && seg.exists}<a class="nb-wikilink" href="#/" on:click|preventDefault={() => go(seg.target_path!)}>{seg.text}</a>{:else if seg.kind === "link"}<span class="nb-redlink" title="Page not found">{seg.text}</span>{:else}{seg.text}{/if}{/each}</article>
+    <article class="nb-card" style="margin-top:12px;white-space:pre-wrap">{#each view.segments as seg}{#if seg.kind === "link" && seg.exists}<a class="nb-wikilink" href="#/" on:click|preventDefault={() => go(seg.target_path!)}>{seg.text}</a>{:else if seg.kind === "link"}<a class="nb-redlink" href="#/" title="Create this page" on:click|preventDefault={() => createFromLink(seg.text)}>{seg.text}</a>{:else}{seg.text}{/if}{/each}</article>
     {#if view.resource}<p style="margin-top:12px"><a href={view.resource} target="_blank">Open source ↗</a></p>{/if}
     {#if view.backlinks.length}
       <div class="nb-card" style="margin-top:16px">
@@ -123,6 +142,6 @@
     color: #c0392b;
     font-weight: 700;
     text-decoration: underline dotted;
-    cursor: not-allowed;
+    cursor: pointer;
   }
 </style>
