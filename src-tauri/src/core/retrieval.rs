@@ -43,6 +43,67 @@ pub fn search<'a>(query: &str, entries: &'a [IndexEntry], k: usize) -> Vec<&'a I
     scored.into_iter().take(k).map(|(_, e)| e).collect()
 }
 
+/// Target maximum size (in characters) for a single chunk.
+pub const MAX_CHUNK_CHARS: usize = 800;
+
+/// Split a page body into retrieval chunks.
+///
+/// Paragraphs are delimited by blank lines. Markdown headings (`#`-prefixed lines)
+/// also start a new paragraph. Paragraphs are greedily packed into chunks up to
+/// `MAX_CHUNK_CHARS`; a paragraph is never split across chunks. A single paragraph
+/// longer than the limit becomes its own (oversized) chunk. An empty/whitespace-only
+/// body yields no chunks.
+pub fn chunk_body(body: &str) -> Vec<String> {
+    let paragraphs = split_paragraphs(body);
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for para in paragraphs {
+        if current.is_empty() {
+            current = para;
+        } else if current.chars().count() + 2 + para.chars().count() <= MAX_CHUNK_CHARS {
+            current.push_str("\n\n");
+            current.push_str(&para);
+        } else {
+            chunks.push(std::mem::take(&mut current));
+            current = para;
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// Group raw lines into trimmed paragraphs. Blank lines separate paragraphs; a
+/// heading line (starts with `#`) forces a boundary before itself.
+fn split_paragraphs(body: &str) -> Vec<String> {
+    let mut paras: Vec<String> = Vec::new();
+    let mut buf: Vec<&str> = Vec::new();
+    let flush = |buf: &mut Vec<&str>, paras: &mut Vec<String>| {
+        if !buf.is_empty() {
+            let joined = buf.join("\n");
+            let trimmed = joined.trim();
+            if !trimmed.is_empty() {
+                paras.push(trimmed.to_string());
+            }
+            buf.clear();
+        }
+    };
+    for line in body.lines() {
+        if line.trim().is_empty() {
+            flush(&mut buf, &mut paras);
+        } else if line.trim_start().starts_with('#') {
+            flush(&mut buf, &mut paras);
+            buf.push(line);
+            flush(&mut buf, &mut paras);
+        } else {
+            buf.push(line);
+        }
+    }
+    flush(&mut buf, &mut paras);
+    paras
+}
+
 use crate::core::store::OkfStore;
 use anyhow::Result;
 
@@ -94,6 +155,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn empty_body_yields_no_chunks() {
+        assert!(chunk_body("").is_empty());
+        assert!(chunk_body("   \n\n  ").is_empty());
+    }
+
+    #[test]
+    fn short_body_is_one_chunk() {
+        let chunks = chunk_body("para one\n\npara two");
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].contains("para one"));
+        assert!(chunks[0].contains("para two"));
+    }
+
+    #[test]
+    fn packs_paragraphs_up_to_limit_without_splitting() {
+        let p = "x".repeat(500);
+        let chunks = chunk_body(&format!("{p}\n\n{p}"));
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chars().count(), 500);
+        assert_eq!(chunks[1].chars().count(), 500);
+    }
+
+    #[test]
+    fn oversized_paragraph_becomes_its_own_chunk() {
+        let big = "y".repeat(2000);
+        let chunks = chunk_body(&big);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].chars().count(), 2000);
+    }
+
+    #[test]
+    fn headings_start_new_paragraph_boundaries() {
+        let body = "intro text\n\n## Section\n\nbody text";
+        let chunks = chunk_body(body);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].contains("## Section"));
     }
 
     #[test]
