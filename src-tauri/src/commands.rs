@@ -187,6 +187,27 @@ pub async fn submit_source(
     })
 }
 
+/// Force a full rebuild of the retrieval index from scratch (ignores any reuse).
+/// Passing a default `PersistedIndex` (empty `embedder_id`) guarantees an id mismatch,
+/// so every page is re-embedded with the currently-selected embedder.
+#[tauri::command]
+pub async fn reindex(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
+    let store = OkfStore::new(settings.wiki_path.clone());
+
+    let next = rebuild_index(
+        &store,
+        embedder.as_ref(),
+        &index_store::PersistedIndex::default(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
+    *state.index.lock().unwrap() = next;
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct AnswerDto {
     pub text: String,

@@ -103,3 +103,29 @@ async fn backlinks_resolve_across_pages() {
         }]
     );
 }
+
+#[tokio::test]
+async fn reindex_from_empty_prev_embeds_all_pages() {
+    let dir = unique_tmp();
+    let store = OkfStore::new(&dir);
+    let r = digest(
+        &FakeProvider {
+            reply: r#"{"title":"Alpha","description":"d","tags":[],"body":"**TL;DR.** a."}"#.into(),
+        },
+        "src",
+        None,
+        None,
+        &[],
+    )
+    .await
+    .unwrap();
+    store.write_page(&r.page).unwrap();
+
+    // reindex == rebuild against a default (empty) index
+    let embedder = HashEmbedder;
+    let idx = rebuild_index(&store, &embedder, &PersistedIndex::default())
+        .await
+        .unwrap();
+    assert_eq!(idx.pages.len(), 1);
+    assert_eq!(idx.embedder_id, "hash-fnv-256");
+}

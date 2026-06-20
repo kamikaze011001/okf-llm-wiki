@@ -37,7 +37,8 @@ pub fn run() {
             commands::list_pages,
             commands::get_page_view,
             commands::submit_source,
-            commands::ask_question
+            commands::ask_question,
+            commands::reindex
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
