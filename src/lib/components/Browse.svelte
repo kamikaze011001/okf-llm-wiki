@@ -29,6 +29,7 @@
     confirmingDelete = false;
     deleteError = "";
     createError = "";
+    creating = false;
     if (pendingEdit) { pendingEdit = false; startEdit(); }
   }
   function go(path: string) { currentPage.set(path); }
@@ -73,6 +74,7 @@
   }
   function cancelDelete() { confirmingDelete = false; }
   async function createFromLink(title: string) {
+    if (creating) return;
     creating = true;
     createError = "";
     try {

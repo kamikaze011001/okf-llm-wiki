@@ -321,12 +321,11 @@ pub async fn create_page(state: State<'_, AppState>, title: String) -> Result<Pa
     if slug.is_empty() {
         return Err("cannot create a page with an empty title".to_string());
     }
+    let page = new_stub_page(&title);
     let s = OkfStore::new(settings.wiki_path.clone());
-    let path = format!("concepts/{slug}.md");
-    if s.read_page(&path).is_ok() {
+    if s.read_page(&page.path).is_ok() {
         return Err(format!("a page for \"{title}\" already exists"));
     }
-    let page = new_stub_page(&title);
     s.write_page(&page).map_err(|e| e.to_string())?;
     s.append_log(&format!("created {title}"))
         .map_err(|e| e.to_string())?;
