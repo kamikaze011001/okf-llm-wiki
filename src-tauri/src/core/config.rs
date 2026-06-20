@@ -55,6 +55,22 @@ struct PersistedSettings {
     provider: String,
     model: String,
     wiki_path: String,
+    #[serde(default = "default_embed_provider")]
+    embed_provider: String,
+    #[serde(default = "default_embed_model")]
+    embed_model: String,
+    #[serde(default = "default_ollama_url")]
+    ollama_url: String,
+}
+
+fn default_embed_provider() -> String {
+    "hash".into()
+}
+fn default_embed_model() -> String {
+    "nomic-embed-text".into()
+}
+fn default_ollama_url() -> String {
+    "http://localhost:11434".into()
 }
 
 /// Persists Settings: non-secret fields to `<dir>/settings.json`, the API key to a `SecretStore`.
@@ -79,6 +95,9 @@ impl ConfigStore {
             provider: s.provider.clone(),
             model: s.model.clone(),
             wiki_path: s.wiki_path.clone(),
+            embed_provider: s.embed_provider.clone(),
+            embed_model: s.embed_model.clone(),
+            ollama_url: s.ollama_url.clone(),
         };
         let json = serde_json::to_string_pretty(&persisted).context("serializing settings")?;
         let dest = self.dir.join(SETTINGS_FILE);
@@ -110,6 +129,9 @@ impl ConfigStore {
                     model: p.model,
                     api_key: String::new(),
                     wiki_path: p.wiki_path,
+                    embed_provider: p.embed_provider,
+                    embed_model: p.embed_model,
+                    ollama_url: p.ollama_url,
                 },
                 // Present but corrupt: surface it so the user can self-diagnose
                 // (e.g. delete the file), then degrade to defaults. The file never
@@ -170,6 +192,7 @@ mod tests {
             model: "claude-opus-4-8".into(),
             api_key: "sk-secret-123".into(),
             wiki_path: "/Users/me/wiki".into(),
+            ..Settings::default()
         }
     }
 
@@ -212,5 +235,22 @@ mod tests {
         cleared.api_key = String::new();
         cfg.save(&cleared).unwrap();
         assert_eq!(cfg.load().api_key, "");
+    }
+
+    #[test]
+    fn persists_embed_fields() {
+        let dir = tmp();
+        let store = ConfigStore::new(dir.clone(), Box::new(MemSecretStore::default()));
+        let s = Settings {
+            embed_provider: "ollama".into(),
+            embed_model: "nomic-embed-text".into(),
+            ollama_url: "http://host:1234".into(),
+            ..Settings::default()
+        };
+        store.save(&s).unwrap();
+        let loaded = store.load();
+        assert_eq!(loaded.embed_provider, "ollama");
+        assert_eq!(loaded.embed_model, "nomic-embed-text");
+        assert_eq!(loaded.ollama_url, "http://host:1234");
     }
 }
