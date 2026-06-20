@@ -24,6 +24,7 @@
     view = await getPageView(path);
     mode = "view";
     confirmingDelete = false;
+    deleteError = "";
   }
   function go(path: string) { currentPage.set(path); }
   function startEdit() {

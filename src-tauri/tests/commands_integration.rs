@@ -179,6 +179,8 @@ async fn edit_round_trip_preserves_hidden_frontmatter_and_updates_index() {
 
     // The command appends an "edited <title>" line to log.md.
     let log_title = read.frontmatter.title.clone().unwrap_or_default();
+    // Mirrors the command's append_log call; the command path is integration-tested
+    // via the composed core primitives since building a Tauri State here is impractical.
     store.append_log(&format!("edited {log_title}")).unwrap();
     let log = std::fs::read_to_string(dir.join("log.md")).unwrap();
     assert!(log.contains(&format!("- edited {log_title}")));
@@ -221,6 +223,8 @@ async fn delete_drops_page_from_listing_and_index() {
     assert!(!after.pages.contains_key(&path));
 
     // The command appends a "deleted <title>" line to log.md.
+    // Mirrors the command's append_log call; the command path is integration-tested
+    // via the composed core primitives since building a Tauri State here is impractical.
     store.append_log("deleted Alpha").unwrap();
     let log = std::fs::read_to_string(dir.join("log.md")).unwrap();
     assert!(log.contains("- deleted Alpha"));

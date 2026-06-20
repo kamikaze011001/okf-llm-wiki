@@ -54,6 +54,25 @@ fn store(state: &State<AppState>) -> OkfStore {
     OkfStore::new(state.settings.lock().unwrap().wiki_path.clone())
 }
 
+/// Rebuild and persist the retrieval index, then rebuild the link graph, after a
+/// store mutation. Locks are acquired and released per-statement — no `MutexGuard`
+/// is ever held across the `.await`.
+async fn refresh_index_and_links(
+    state: &AppState,
+    store: &OkfStore,
+    settings: &Settings,
+) -> Result<(), String> {
+    let embedder = make_embedder(settings).map_err(|e| e.to_string())?;
+    let prev = state.index.lock().unwrap().clone();
+    let next = rebuild_index(store, embedder.as_ref(), &prev)
+        .await
+        .map_err(|e| e.to_string())?;
+    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
+    *state.index.lock().unwrap() = next;
+    *state.links.lock().unwrap() = build_link_graph(store).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
@@ -180,14 +199,7 @@ pub async fn submit_source(
     let s = OkfStore::new(settings.wiki_path.clone());
     s.write_page(&r.page).map_err(|e| e.to_string())?;
     s.append_log(&r.log_entry).map_err(|e| e.to_string())?;
-    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
-    let prev = state.index.lock().unwrap().clone();
-    let next = rebuild_index(&s, embedder.as_ref(), &prev)
-        .await
-        .map_err(|e| e.to_string())?;
-    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
-    *state.index.lock().unwrap() = next;
-    *state.links.lock().unwrap() = build_link_graph(&s).map_err(|e| e.to_string())?;
+    refresh_index_and_links(&state, &s, &settings).await?;
     Ok(PageDto {
         path: r.page.path,
         title: r.page.frontmatter.title.unwrap_or_default(),
@@ -266,15 +278,7 @@ pub async fn update_page(
     let log_title = edited.frontmatter.title.clone().unwrap_or_default();
     s.append_log(&format!("edited {log_title}"))
         .map_err(|e| e.to_string())?;
-
-    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
-    let prev = state.index.lock().unwrap().clone();
-    let next = rebuild_index(&s, embedder.as_ref(), &prev)
-        .await
-        .map_err(|e| e.to_string())?;
-    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
-    *state.index.lock().unwrap() = next;
-    *state.links.lock().unwrap() = build_link_graph(&s).map_err(|e| e.to_string())?;
+    refresh_index_and_links(&state, &s, &settings).await?;
 
     Ok(PageDto {
         path: edited.path,
@@ -291,6 +295,7 @@ pub async fn update_page(
 pub async fn delete_page(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let settings = state.settings.lock().unwrap().clone();
     let s = OkfStore::new(settings.wiki_path.clone());
+    // title is best-effort for the log line; delete proceeds even if the read fails.
     let title = s
         .read_page(&path)
         .ok()
@@ -299,15 +304,7 @@ pub async fn delete_page(state: State<'_, AppState>, path: String) -> Result<(),
     s.delete_page(&path).map_err(|e| e.to_string())?;
     s.append_log(&format!("deleted {title}"))
         .map_err(|e| e.to_string())?;
-
-    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
-    let prev = state.index.lock().unwrap().clone();
-    let next = rebuild_index(&s, embedder.as_ref(), &prev)
-        .await
-        .map_err(|e| e.to_string())?;
-    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
-    *state.index.lock().unwrap() = next;
-    *state.links.lock().unwrap() = build_link_graph(&s).map_err(|e| e.to_string())?;
+    refresh_index_and_links(&state, &s, &settings).await?;
 
     Ok(())
 }
