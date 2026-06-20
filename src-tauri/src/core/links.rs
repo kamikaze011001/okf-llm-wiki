@@ -1,4 +1,5 @@
 use crate::core::slug::slugify;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Link {
@@ -63,6 +64,27 @@ pub fn extract_links(body: &str) -> Vec<Link> {
             Segment::Text(_) => None,
         })
         .collect()
+}
+
+/// Rewrite the body so every `[[X]]` whose `slugify(X)` is not in `known` becomes plain `X`.
+/// Known links are re-emitted as `[[trimmed text]]`. Pure and deterministic.
+pub fn validate_links(body: &str, known: &HashSet<String>) -> String {
+    let mut out = String::new();
+    for seg in segment_body(body) {
+        match seg {
+            Segment::Text(t) => out.push_str(&t),
+            Segment::Link { text, target_slug } => {
+                if known.contains(&target_slug) {
+                    out.push_str("[[");
+                    out.push_str(&text);
+                    out.push_str("]]");
+                } else {
+                    out.push_str(&text);
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -148,5 +170,25 @@ mod tests {
                 target_slug: "spaced-title".into()
             }]
         );
+    }
+
+    #[test]
+    fn validate_keeps_known_unwraps_unknown() {
+        let known: std::collections::HashSet<String> =
+            ["vitamin-d-sleep".to_string()].into_iter().collect();
+        let out = validate_links("See [[Vitamin D & Sleep]] and [[Made Up]].", &known);
+        assert_eq!(out, "See [[Vitamin D & Sleep]] and Made Up.");
+    }
+
+    #[test]
+    fn validate_leaves_plain_text_untouched() {
+        let known = std::collections::HashSet::new();
+        assert_eq!(validate_links("no links here", &known), "no links here");
+    }
+
+    #[test]
+    fn validate_is_case_insensitive_via_slug() {
+        let known: std::collections::HashSet<String> = ["alpha".to_string()].into_iter().collect();
+        assert_eq!(validate_links("[[ALPHA]]", &known), "[[ALPHA]]");
     }
 }
