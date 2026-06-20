@@ -47,6 +47,13 @@ impl OkfStore {
         })
     }
 
+    /// Delete a page file. Errors if it does not exist.
+    pub fn delete_page(&self, rel: &str) -> Result<()> {
+        let path = self.root.join(rel);
+        std::fs::remove_file(&path).with_context(|| format!("deleting {}", path.display()))?;
+        Ok(())
+    }
+
     /// Recursively list *.md files relative to root, excluding index.md and log.md, sorted.
     pub fn list_pages(&self) -> Result<Vec<String>> {
         let mut pages = Vec::new();
@@ -241,6 +248,36 @@ mod tests {
         assert_eq!(page.frontmatter.title, Some("X".into()));
         assert_eq!(page.frontmatter.type_, "Concept");
         assert!(page.body.trim().is_empty(), "body should be empty");
+    }
+
+    #[test]
+    fn delete_page_removes_file() {
+        let root = tmp();
+        let store = OkfStore::new(root.clone());
+        let page = Page {
+            path: "concepts/gone.md".into(),
+            frontmatter: Frontmatter {
+                type_: "Concept".into(),
+                title: Some("Gone".into()),
+                description: None,
+                tags: vec![],
+                resource: None,
+                timestamp: None,
+                note: None,
+                extra: BTreeMap::new(),
+            },
+            body: "bye".into(),
+        };
+        store.write_page(&page).unwrap();
+        assert!(root.join("concepts/gone.md").exists());
+        store.delete_page("concepts/gone.md").unwrap();
+        assert!(!root.join("concepts/gone.md").exists());
+    }
+
+    #[test]
+    fn delete_page_missing_file_errors() {
+        let store = OkfStore::new(tmp());
+        assert!(store.delete_page("concepts/nope.md").is_err());
     }
 
     #[test]
