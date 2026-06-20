@@ -2,6 +2,7 @@ pub mod ask;
 pub mod config;
 pub mod digest;
 pub mod fetch;
+pub mod links;
 pub mod page;
 pub mod provider;
 pub mod retrieval;
