@@ -1,5 +1,5 @@
+use crate::core::index_store::Chunk;
 use crate::core::provider::LlmProvider;
-use crate::core::retrieval::{search, IndexEntry};
 use anyhow::Result;
 
 pub struct Answer {
@@ -7,20 +7,23 @@ pub struct Answer {
     pub citations: Vec<String>,
 }
 
-pub async fn ask(
-    provider: &dyn LlmProvider,
-    question: &str,
-    index: &[IndexEntry],
-) -> Result<Answer> {
-    let hits = search(question, index, 4);
-    let citations: Vec<String> = hits.iter().map(|h| h.path.clone()).collect();
+/// Ask the LLM to answer `question` grounded ONLY in the pre-retrieved `hits`.
+/// Citations are the hit page paths, de-duplicated, preserving rank order.
+pub async fn ask(provider: &dyn LlmProvider, question: &str, hits: &[&Chunk]) -> Result<Answer> {
     let context = hits
         .iter()
-        .map(|h| format!("[{}]\n{}", h.path, h.snippet))
+        .map(|h| format!("[{}]\n{}", h.path, h.text))
         .collect::<Vec<_>>()
         .join("\n\n");
-    let system = "Answer ONLY from the provided wiki context. Cite page paths in [brackets]. \
-        If the context is insufficient, say so.";
+
+    let mut citations: Vec<String> = Vec::new();
+    for h in hits {
+        if !citations.contains(&h.path) {
+            citations.push(h.path.clone());
+        }
+    }
+
+    let system = "Answer ONLY from the provided wiki context. Cite the page paths you used in [brackets]. If the context does not contain the answer, say you don't know.";
     let user = format!("QUESTION: {question}\n\nWIKI CONTEXT:\n{context}");
     let text = provider.complete(system, &user).await?;
     Ok(Answer { text, citations })
@@ -29,20 +32,29 @@ pub async fn ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::index_store::Chunk;
     use crate::core::provider::fake::FakeProvider;
-    use crate::core::retrieval::hash_embed;
+
     #[tokio::test]
-    async fn answers_and_returns_citations() {
-        let index = vec![IndexEntry {
-            path: "concepts/sleep.md".into(),
-            vector: hash_embed("vitamin d sleep"),
-            snippet: "morning dose".into(),
-        }];
-        let p = FakeProvider {
-            reply: "Take it in the morning [concepts/sleep.md]".into(),
+    async fn answers_from_hits_and_dedupes_citations() {
+        let c0 = Chunk {
+            path: "concepts/vd.md".into(),
+            chunk_id: 0,
+            text: "Vitamin D helps sleep.".into(),
+            vector: vec![],
         };
-        let a = ask(&p, "vitamin d sleep timing", &index).await.unwrap();
-        assert!(a.text.contains("morning"));
-        assert_eq!(a.citations, vec!["concepts/sleep.md".to_string()]);
+        let c1 = Chunk {
+            path: "concepts/vd.md".into(),
+            chunk_id: 1,
+            text: "Take it in the morning.".into(),
+            vector: vec![],
+        };
+        let hits: Vec<&Chunk> = vec![&c0, &c1];
+        let p = FakeProvider {
+            reply: "Morning dose [concepts/vd.md]".into(),
+        };
+        let a = ask(&p, "when to take vitamin d", &hits).await.unwrap();
+        assert!(a.text.contains("Morning"));
+        assert_eq!(a.citations, vec!["concepts/vd.md".to_string()]);
     }
 }

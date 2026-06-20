@@ -1,9 +1,11 @@
 use crate::core::{
     ask::ask,
     digest::digest,
+    embed::make_embedder,
     fetch::fetch_clean,
+    index_store::{self, rebuild_index},
     links::{build_link_graph, segment_body, Segment},
-    retrieval::build_index,
+    retrieval::search,
     settings::{make_provider, Settings},
     store::OkfStore,
 };
@@ -55,18 +57,33 @@ pub fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
 }
 
-/// Persist settings, rebuild the index, then swap in-memory state.
+/// Persist settings, then rebuild + persist the retrieval index for the new config.
 ///
-/// Order is deliberate: `config.save()` runs first so a persistence failure leaves the
-/// in-memory `Settings` untouched (the command returns `Err`, the UI surfaces it). The
-/// index is then rebuilt from the new `wiki_path` before the in-memory swap; this is a
-/// synchronous single-user command, so the brief window where the index reflects the new
-/// path while `state.settings` is still stale is not observable by any concurrent reader.
+/// `config.save()` runs first so a persistence failure leaves in-memory state untouched.
+/// The index is rebuilt with the newly-selected embedder (a changed embedder id forces a
+/// full re-embed inside `rebuild_index`). No `MutexGuard` is held across the `.await`.
+///
+/// Partial-success caveat: if `config.save` succeeds but the rebuild then fails (e.g. the
+/// newly-selected Ollama endpoint is unreachable), the new settings are already on disk
+/// while in-memory `settings`/`index` stay on the old values, and the command returns
+/// `Err`. The session keeps working with the previous embedder; the user can fix the
+/// endpoint and re-save, or call `reindex`, to recover. Accepted trade-off for a
+/// single-user local app.
 #[tauri::command]
-pub fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
+pub async fn set_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     state.config.save(&settings).map_err(|e| e.to_string())?;
-    *state.index.lock().unwrap() = crate::state::initial_index(&settings.wiki_path);
-    *state.links.lock().unwrap() = crate::state::initial_links(&settings.wiki_path);
+    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
+    let store = OkfStore::new(settings.wiki_path.clone());
+    let links = crate::state::initial_links(&settings.wiki_path);
+
+    let prev = state.index.lock().unwrap().clone();
+    let next = rebuild_index(&store, embedder.as_ref(), &prev)
+        .await
+        .map_err(|e| e.to_string())?;
+    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
+
+    *state.index.lock().unwrap() = next;
+    *state.links.lock().unwrap() = links;
     *state.settings.lock().unwrap() = settings;
     Ok(())
 }
@@ -159,7 +176,13 @@ pub async fn submit_source(
     let s = OkfStore::new(settings.wiki_path.clone());
     s.write_page(&r.page).map_err(|e| e.to_string())?;
     s.append_log(&r.log_entry).map_err(|e| e.to_string())?;
-    *state.index.lock().unwrap() = build_index(&s).map_err(|e| e.to_string())?;
+    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
+    let prev = state.index.lock().unwrap().clone();
+    let next = rebuild_index(&s, embedder.as_ref(), &prev)
+        .await
+        .map_err(|e| e.to_string())?;
+    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
+    *state.index.lock().unwrap() = next;
     *state.links.lock().unwrap() = build_link_graph(&s).map_err(|e| e.to_string())?;
     Ok(PageDto {
         path: r.page.path,
@@ -169,6 +192,27 @@ pub async fn submit_source(
         note: r.page.frontmatter.note,
         resource: r.page.frontmatter.resource,
     })
+}
+
+/// Force a full rebuild of the retrieval index from scratch (ignores any reuse).
+/// Passing a default `PersistedIndex` (empty `embedder_id`) guarantees an id mismatch,
+/// so every page is re-embedded with the currently-selected embedder.
+#[tauri::command]
+pub async fn reindex(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
+    let store = OkfStore::new(settings.wiki_path.clone());
+
+    let next = rebuild_index(
+        &store,
+        embedder.as_ref(),
+        &index_store::PersistedIndex::default(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    index_store::save(&state.index_path, &next).map_err(|e| e.to_string())?;
+    *state.index.lock().unwrap() = next;
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -184,8 +228,13 @@ pub async fn ask_question(
 ) -> Result<AnswerDto, String> {
     let settings = state.settings.lock().unwrap().clone();
     let provider = make_provider(&settings).map_err(|e| e.to_string())?;
+    let embedder = make_embedder(&settings).map_err(|e| e.to_string())?;
     let index = state.index.lock().unwrap().clone();
-    let a = ask(provider.as_ref(), &question, &index)
+
+    let hits = search(embedder.as_ref(), &question, &index, 4)
+        .await
+        .map_err(|e| e.to_string())?;
+    let a = ask(provider.as_ref(), &question, &hits)
         .await
         .map_err(|e| e.to_string())?;
     Ok(AnswerDto {

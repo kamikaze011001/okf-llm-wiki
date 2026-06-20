@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (_cmd, args) => ({ echoed: args })) }));
-import { listPages, submitSource, setSettings, getPageView } from "./api";
+import { listPages, submitSource, setSettings, getPageView, reindex } from "./api";
 import { invoke } from "@tauri-apps/api/core";
 
 describe("api", () => {
@@ -14,11 +14,15 @@ describe("api", () => {
   it("setSettings rejects when the backend errors", async () => {
     (invoke as any).mockRejectedValueOnce("keychain failure");
     await expect(
-      setSettings({ provider: "claude", model: "m", api_key: "k", wiki_path: "/w" })
+      setSettings({ provider: "claude", model: "m", api_key: "k", wiki_path: "/w", embed_provider: "hash", embed_model: "nomic-embed-text", ollama_url: "http://localhost:11434" })
     ).rejects.toBe("keychain failure");
   });
   it("getPageView passes the path", async () => {
     const r: any = await getPageView("concepts/x.md");
     expect(r.echoed).toEqual({ path: "concepts/x.md" });
+  });
+  it("reindex invokes the reindex command", async () => {
+    await reindex();
+    expect(invoke).toHaveBeenCalledWith("reindex");
   });
 });

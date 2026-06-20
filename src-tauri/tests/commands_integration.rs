@@ -1,6 +1,9 @@
+use okf_llm_wiki_lib::core::embed::HashEmbedder;
+use okf_llm_wiki_lib::core::index_store::{rebuild_index, PersistedIndex};
 use okf_llm_wiki_lib::core::links::{build_link_graph, concept_refs, BacklinkRef};
 use okf_llm_wiki_lib::core::provider::fake::FakeProvider;
-use okf_llm_wiki_lib::core::{ask::ask, digest::digest, retrieval::build_index, store::OkfStore};
+use okf_llm_wiki_lib::core::retrieval::search;
+use okf_llm_wiki_lib::core::{ask::ask, digest::digest, store::OkfStore};
 
 fn unique_tmp() -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,11 +40,17 @@ async fn full_loop_digest_then_ask() {
     store.write_page(&r.page).unwrap();
     store.append_log(&r.log_entry).unwrap();
 
-    let index = build_index(&store).unwrap();
+    let embedder = HashEmbedder;
+    let index = rebuild_index(&store, &embedder, &PersistedIndex::default())
+        .await
+        .unwrap();
+    let hits = search(&embedder, "vitamin d sleep", &index, 4)
+        .await
+        .unwrap();
     let ap = FakeProvider {
         reply: "Morning dose [concepts/vitamin-d-sleep.md]".into(),
     };
-    let a = ask(&ap, "vitamin d sleep", &index).await.unwrap();
+    let a = ask(&ap, "vitamin d sleep", &hits).await.unwrap();
     assert!(a.text.contains("Morning"));
     assert_eq!(a.citations, vec!["concepts/vitamin-d-sleep.md".to_string()]);
 }
@@ -93,4 +102,30 @@ async fn backlinks_resolve_across_pages() {
             title: "Beta".into()
         }]
     );
+}
+
+#[tokio::test]
+async fn reindex_from_empty_prev_embeds_all_pages() {
+    let dir = unique_tmp();
+    let store = OkfStore::new(&dir);
+    let r = digest(
+        &FakeProvider {
+            reply: r#"{"title":"Alpha","description":"d","tags":[],"body":"**TL;DR.** a."}"#.into(),
+        },
+        "src",
+        None,
+        None,
+        &[],
+    )
+    .await
+    .unwrap();
+    store.write_page(&r.page).unwrap();
+
+    // reindex == rebuild against a default (empty) index
+    let embedder = HashEmbedder;
+    let idx = rebuild_index(&store, &embedder, &PersistedIndex::default())
+        .await
+        .unwrap();
+    assert_eq!(idx.pages.len(), 1);
+    assert_eq!(idx.embedder_id, "hash-fnv-256");
 }

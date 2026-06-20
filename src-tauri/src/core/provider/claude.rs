@@ -51,10 +51,6 @@ impl LlmProvider for ClaudeProvider {
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow!("unexpected Claude response shape"))
     }
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        // Anthropic has no first-party embeddings; v1 uses a local hashing embedder.
-        Ok(crate::core::retrieval::hash_embed(text))
-    }
 }
 
 #[cfg(test)]
