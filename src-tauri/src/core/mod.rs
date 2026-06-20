@@ -3,6 +3,7 @@ pub mod config;
 pub mod digest;
 pub mod embed;
 pub mod fetch;
+pub mod index_store;
 pub mod links;
 pub mod page;
 pub mod provider;
