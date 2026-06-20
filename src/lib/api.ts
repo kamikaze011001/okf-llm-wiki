@@ -17,3 +17,4 @@ export const reindex = () => invoke<void>("reindex");
 export const updatePage = (path: string, title: string | undefined, tags: string[], note: string | undefined, body: string) =>
   invoke<PageDto>("update_page", { path, title, tags, note, body });
 export const deletePage = (path: string) => invoke<void>("delete_page", { path });
+export const createPage = (title: string) => invoke<PageDto>("create_page", { title });
