@@ -62,6 +62,13 @@ pub fn get_settings(state: State<AppState>) -> Settings {
 /// `config.save()` runs first so a persistence failure leaves in-memory state untouched.
 /// The index is rebuilt with the newly-selected embedder (a changed embedder id forces a
 /// full re-embed inside `rebuild_index`). No `MutexGuard` is held across the `.await`.
+///
+/// Partial-success caveat: if `config.save` succeeds but the rebuild then fails (e.g. the
+/// newly-selected Ollama endpoint is unreachable), the new settings are already on disk
+/// while in-memory `settings`/`index` stay on the old values, and the command returns
+/// `Err`. The session keeps working with the previous embedder; the user can fix the
+/// endpoint and re-save, or call `reindex`, to recover. Accepted trade-off for a
+/// single-user local app.
 #[tauri::command]
 pub async fn set_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
     state.config.save(&settings).map_err(|e| e.to_string())?;

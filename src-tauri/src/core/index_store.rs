@@ -271,7 +271,8 @@ mod tests {
         assert_eq!(idx.pages.len(), 1);
         let entry = idx.pages.get("concepts/a.md").unwrap();
         assert_eq!(entry.chunks.len(), 1);
-        assert!(calls.load(AtomicOrdering::SeqCst) >= 1);
+        // one page, one chunk -> exactly one embed call (guards against over-embedding)
+        assert_eq!(calls.load(AtomicOrdering::SeqCst), 1);
     }
 
     #[tokio::test]

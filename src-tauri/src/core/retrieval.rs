@@ -28,6 +28,9 @@ pub fn hash_embed(text: &str) -> Vec<f32> {
     v
 }
 
+/// Similarity score between two vectors. `zip` truncates to the shorter slice, so
+/// callers must pass equal-length vectors — `search` enforces this by filtering out
+/// chunks whose stored dimension differs from the query embedding.
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
