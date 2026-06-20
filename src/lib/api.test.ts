@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (_cmd, args) => ({ echoed: args })) }));
-import { listPages, submitSource, setSettings } from "./api";
+import { listPages, submitSource, setSettings, getPageView } from "./api";
 import { invoke } from "@tauri-apps/api/core";
 
 describe("api", () => {
@@ -16,5 +16,9 @@ describe("api", () => {
     await expect(
       setSettings({ provider: "claude", model: "m", api_key: "k", wiki_path: "/w" })
     ).rejects.toBe("keychain failure");
+  });
+  it("getPageView passes the path", async () => {
+    const r: any = await getPageView("concepts/x.md");
+    expect(r.echoed).toEqual({ path: "concepts/x.md" });
   });
 });
