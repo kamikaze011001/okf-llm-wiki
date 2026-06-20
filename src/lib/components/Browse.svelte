@@ -24,13 +24,18 @@
   $: if (mounted) loadFor(selectedPath);
   async function loadFor(path: string | null) {
     if (!path) { view = undefined; return; }
-    view = await getPageView(path);
-    mode = "view";
-    confirmingDelete = false;
-    deleteError = "";
-    createError = "";
-    creating = false;
-    if (pendingEdit) { pendingEdit = false; startEdit(); }
+    const enterEdit = pendingEdit;
+    pendingEdit = false;
+    try {
+      view = await getPageView(path);
+      mode = "view";
+      confirmingDelete = false;
+      deleteError = "";
+      createError = "";
+      if (enterEdit) startEdit();
+    } finally {
+      creating = false;
+    }
   }
   function go(path: string) { currentPage.set(path); }
   function startEdit() {
