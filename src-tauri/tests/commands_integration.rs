@@ -1,3 +1,4 @@
+use okf_llm_wiki_lib::core::create::new_stub_page;
 use okf_llm_wiki_lib::core::edit::apply_page_edits;
 use okf_llm_wiki_lib::core::embed::HashEmbedder;
 use okf_llm_wiki_lib::core::index_store::{rebuild_index, PersistedIndex};
@@ -274,4 +275,65 @@ async fn link_to_deleted_page_renders_as_red_link() {
         matches!(seg, Segment::Link { target_slug, .. } if graph.path_for(target_slug).is_none())
     });
     assert!(has_unresolved_link, "deleted target should be unresolved");
+}
+
+#[tokio::test]
+async fn create_stub_resolves_a_previously_red_link() {
+    let dir = unique_tmp();
+    let store = OkfStore::new(&dir);
+
+    // Seed Beta with a raw [[Ghost]] link. We bypass digest's link validation (which
+    // would strip a link to a non-existent concept) by editing the body in directly.
+    let b = digest(
+        &FakeProvider {
+            reply: r#"{"title":"Beta","description":"d","tags":[],"body":"placeholder."}"#.into(),
+        },
+        "src b",
+        None,
+        None,
+        &[],
+    )
+    .await
+    .unwrap();
+    let beta = apply_page_edits(
+        b.page,
+        Some("Beta".into()),
+        vec![],
+        None,
+        "Beta builds on [[Ghost]].".into(),
+    );
+    store.write_page(&beta).unwrap();
+
+    // Ghost does not exist yet -> the link is unresolved (red).
+    let before = build_link_graph(&store).unwrap();
+    assert!(before.path_for("ghost").is_none());
+
+    // Creating the stub at the exact slug resolves the link.
+    let ghost = new_stub_page("Ghost");
+    assert_eq!(ghost.path, "concepts/ghost.md");
+    store.write_page(&ghost).unwrap();
+    store.append_log(&format!("created {}", "Ghost")).unwrap();
+
+    let after = build_link_graph(&store).unwrap();
+    assert_eq!(after.path_for("ghost"), Some("concepts/ghost.md"));
+
+    // The command appends a "created <title>" line to log.md.
+    // Mirrors the command's append_log call; the command path is integration-tested via
+    // the composed core primitives since building a Tauri State here is impractical.
+    let log = std::fs::read_to_string(dir.join("log.md")).unwrap();
+    assert!(log.contains("- created Ghost"));
+}
+
+#[tokio::test]
+async fn stub_collision_is_detectable_before_overwrite() {
+    let dir = unique_tmp();
+    let store = OkfStore::new(&dir);
+
+    // First create succeeds.
+    let ghost = new_stub_page("Ghost");
+    store.write_page(&ghost).unwrap();
+
+    // The command's collision guard reads the target path; an existing page reads Ok,
+    // which is the signal create_page uses to refuse a second create.
+    assert!(store.read_page("concepts/ghost.md").is_ok());
 }

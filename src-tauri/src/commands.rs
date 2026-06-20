@@ -1,5 +1,6 @@
 use crate::core::{
     ask::ask,
+    create::new_stub_page,
     digest::digest,
     edit::apply_page_edits,
     embed::make_embedder,
@@ -8,6 +9,7 @@ use crate::core::{
     links::{build_link_graph, segment_body, Segment},
     retrieval::search,
     settings::{make_provider, Settings},
+    slug::slugify,
     store::OkfStore,
 };
 use crate::state::AppState;
@@ -307,4 +309,35 @@ pub async fn delete_page(state: State<'_, AppState>, path: String) -> Result<(),
     refresh_index_and_links(&state, &s, &settings).await?;
 
     Ok(())
+}
+
+/// Create a new stub page from a `[[link]]` title and refresh the retrieval index and
+/// link graph. The slug is derived from the title, so the originating red-link resolves
+/// after this returns. Refuses an empty title or a slug that already exists (no overwrite).
+#[tauri::command]
+pub async fn create_page(state: State<'_, AppState>, title: String) -> Result<PageDto, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let slug = slugify(&title);
+    if slug.is_empty() {
+        return Err("cannot create a page with an empty title".to_string());
+    }
+    let s = OkfStore::new(settings.wiki_path.clone());
+    let path = format!("concepts/{slug}.md");
+    if s.read_page(&path).is_ok() {
+        return Err(format!("a page for \"{title}\" already exists"));
+    }
+    let page = new_stub_page(&title);
+    s.write_page(&page).map_err(|e| e.to_string())?;
+    s.append_log(&format!("created {title}"))
+        .map_err(|e| e.to_string())?;
+    refresh_index_and_links(&state, &s, &settings).await?;
+
+    Ok(PageDto {
+        path: page.path,
+        title: page.frontmatter.title.unwrap_or_default(),
+        body: page.body,
+        tags: page.frontmatter.tags,
+        note: page.frontmatter.note,
+        resource: page.frontmatter.resource,
+    })
 }
