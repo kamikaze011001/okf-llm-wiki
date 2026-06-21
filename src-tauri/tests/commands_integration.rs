@@ -3,7 +3,7 @@ use okf_llm_wiki_lib::core::edit::apply_page_edits;
 use okf_llm_wiki_lib::core::embed::HashEmbedder;
 use okf_llm_wiki_lib::core::index_store::{rebuild_index, PersistedIndex};
 use okf_llm_wiki_lib::core::links::{
-    build_link_graph, concept_refs, segment_body, BacklinkRef, Segment,
+    build_link_graph, concept_refs, segment_body, BacklinkRef, GraphEdge, Segment,
 };
 use okf_llm_wiki_lib::core::provider::fake::FakeProvider;
 use okf_llm_wiki_lib::core::retrieval::search;
@@ -322,6 +322,54 @@ async fn create_stub_resolves_a_previously_red_link() {
     // the composed core primitives since building a Tauri State here is impractical.
     let log = std::fs::read_to_string(dir.join("log.md")).unwrap();
     assert!(log.contains("- created Ghost"));
+}
+
+#[tokio::test]
+async fn graph_data_reflects_links_across_pages() {
+    let dir = unique_tmp();
+    let store = OkfStore::new(&dir);
+
+    // Alpha exists.
+    let a = digest(
+        &FakeProvider {
+            reply: r#"{"title":"Alpha","description":"d","tags":[],"body":"**TL;DR.** a."}"#.into(),
+        },
+        "src a",
+        None,
+        None,
+        &[],
+    )
+    .await
+    .unwrap();
+    store.write_page(&a.page).unwrap();
+
+    // Beta links to Alpha (Alpha is in the allow-list, so the link survives validation).
+    let existing = concept_refs(&store).unwrap();
+    let b = digest(
+        &FakeProvider {
+            reply:
+                r#"{"title":"Beta","description":"d","tags":[],"body":"Beta builds on [[Alpha]]."}"#
+                    .into(),
+        },
+        "src b",
+        None,
+        None,
+        &existing,
+    )
+    .await
+    .unwrap();
+    store.write_page(&b.page).unwrap();
+
+    let data = build_link_graph(&store).unwrap().graph_data();
+    let node_paths: Vec<&str> = data.nodes.iter().map(|n| n.path.as_str()).collect();
+    assert_eq!(node_paths, vec!["concepts/alpha.md", "concepts/beta.md"]);
+    assert_eq!(
+        data.edges,
+        vec![GraphEdge {
+            source: "concepts/alpha.md".into(),
+            target: "concepts/beta.md".into()
+        }]
+    );
 }
 
 #[tokio::test]

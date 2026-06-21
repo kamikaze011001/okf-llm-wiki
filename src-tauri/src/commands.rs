@@ -52,6 +52,25 @@ pub struct PageViewDto {
     pub backlinks: Vec<RefDto>,
 }
 
+#[derive(Serialize)]
+pub struct GraphNodeDto {
+    pub path: String,
+    pub title: String,
+    pub degree: usize,
+}
+
+#[derive(Serialize)]
+pub struct GraphEdgeDto {
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Serialize)]
+pub struct GraphDto {
+    pub nodes: Vec<GraphNodeDto>,
+    pub edges: Vec<GraphEdgeDto>,
+}
+
 fn store(state: &State<AppState>) -> OkfStore {
     OkfStore::new(state.settings.lock().unwrap().wiki_path.clone())
 }
@@ -174,6 +193,34 @@ pub fn get_page_view(state: State<AppState>, path: String) -> Result<PageViewDto
         resource: page.frontmatter.resource,
         segments,
         backlinks,
+    })
+}
+
+/// Return the whole-wiki concept graph (existing pages as nodes, `[[link]]` edges).
+/// Reads the in-memory link graph only — no file IO, no `.await`, so no `MutexGuard`
+/// is held across an await point.
+#[tauri::command]
+pub fn get_graph(state: State<AppState>) -> Result<GraphDto, String> {
+    let graph = state.links.lock().unwrap();
+    let data = graph.graph_data();
+    Ok(GraphDto {
+        nodes: data
+            .nodes
+            .into_iter()
+            .map(|n| GraphNodeDto {
+                path: n.path,
+                title: n.title,
+                degree: n.degree,
+            })
+            .collect(),
+        edges: data
+            .edges
+            .into_iter()
+            .map(|e| GraphEdgeDto {
+                source: e.source,
+                target: e.target,
+            })
+            .collect(),
     })
 }
 
