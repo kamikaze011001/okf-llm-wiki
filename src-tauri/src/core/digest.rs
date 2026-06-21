@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 
 /// JSON contract the LLM must return.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct DigestJson {
     title: String,
     description: String,
@@ -15,6 +15,82 @@ struct DigestJson {
     body: String,
 }
 
+/// Why a raw LLM reply could not be turned into a usable digest.
+#[derive(Debug)]
+enum DigestFailure {
+    /// The reply did not contain parseable digest JSON; carries the parser error.
+    Unparseable(String),
+    /// Parsed, but a required field was blank after trimming.
+    EmptyField(&'static str),
+}
+
+impl std::fmt::Display for DigestFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DigestFailure::Unparseable(e) => write!(f, "reply was not valid digest JSON: {e}"),
+            DigestFailure::EmptyField(field) => write!(f, "the \"{field}\" field was empty"),
+        }
+    }
+}
+
+/// Parse + validate a raw LLM reply into a `DigestJson`, or report why it failed.
+/// Reuses `extract_json` to peel ```fences```/prose, then requires non-empty
+/// `title` and `body` after trimming.
+fn evaluate(raw: &str) -> std::result::Result<DigestJson, DigestFailure> {
+    let parsed: DigestJson = serde_json::from_str(extract_json(raw))
+        .map_err(|e| DigestFailure::Unparseable(e.to_string()))?;
+    if parsed.title.trim().is_empty() {
+        return Err(DigestFailure::EmptyField("title"));
+    }
+    if parsed.body.trim().is_empty() {
+        return Err(DigestFailure::EmptyField("body"));
+    }
+    Ok(parsed)
+}
+
+/// Build the retry user message: name the failure, echo the previous reply,
+/// restate the JSON requirement, then re-append the original user message so the
+/// model still has the source material.
+fn repair_user_prompt(base_user: &str, prev_raw: &str, failure: &DigestFailure) -> String {
+    format!(
+        "Your previous reply could not be used: {failure}.\n\n\
+         Previous reply:\n{prev_raw}\n\n\
+         Respond ONLY with valid JSON {{\"title\":..,\"description\":..,\"tags\":[..],\"body\":..}}. \
+         Both \"title\" and \"body\" must be non-empty.\n\n\
+         {base_user}"
+    )
+}
+
+/// Call the provider up to `max_attempts` times, feeding each failure back as a
+/// repair prompt, and return the first reply that passes `evaluate`. Transport
+/// errors propagate immediately. Returns an error naming the attempt count if
+/// every attempt fails validation.
+async fn run_digest_attempts(
+    provider: &dyn LlmProvider,
+    system: &str,
+    base_user: &str,
+    max_attempts: usize,
+) -> Result<DigestJson> {
+    let mut last: Option<(String, DigestFailure)> = None;
+    for _ in 1..=max_attempts {
+        let user = match &last {
+            None => base_user.to_string(),
+            Some((prev_raw, failure)) => repair_user_prompt(base_user, prev_raw, failure),
+        };
+        let raw = provider.complete(system, &user).await?;
+        match evaluate(&raw) {
+            Ok(parsed) => return Ok(parsed),
+            Err(failure) => last = Some((raw, failure)),
+        }
+    }
+    // Loop exhausted without success: report the last failure.
+    let (_, failure) = last.expect("at least one attempt ran");
+    Err(anyhow!(
+        "digest failed after {max_attempts} attempts: {failure}"
+    ))
+}
+
+#[derive(Debug)]
 pub struct DigestResult {
     pub page: Page,
     pub log_entry: String,
@@ -51,9 +127,8 @@ pub async fn digest(
         "SOURCE:\n{source_text}\n\nUSER NOTE: {}",
         note.unwrap_or("")
     );
-    let raw = provider.complete(&system, &user).await?;
-    let parsed: DigestJson = serde_json::from_str(extract_json(&raw))
-        .map_err(|e| anyhow!("LLM did not return valid digest JSON: {e}; got: {raw}"))?;
+    const MAX_ATTEMPTS: usize = 3;
+    let parsed = run_digest_attempts(provider, &system, &user, MAX_ATTEMPTS).await?;
     let slug = slugify(&parsed.title);
     // Keep only links to existing concepts or this page itself; drop hallucinated ones.
     let mut known: HashSet<String> = existing.iter().map(|c| c.slug.clone()).collect();
@@ -137,6 +212,7 @@ mod tests {
     use super::*;
     use crate::core::links::ConceptRef;
     use crate::core::provider::fake::FakeProvider;
+    use crate::core::provider::fake::ScriptedProvider;
 
     #[test]
     fn system_prompt_lists_existing_titles_with_link_instruction() {
@@ -224,5 +300,105 @@ mod tests {
     fn extract_json_handles_braces_inside_strings() {
         let raw = "noise {\"body\":\"a } b\",\"x\":1} trailing";
         assert_eq!(extract_json(raw), "{\"body\":\"a } b\",\"x\":1}");
+    }
+
+    #[test]
+    fn evaluate_accepts_valid_json() {
+        let raw = r#"{"title":"T","description":"d","tags":["a"],"body":"b"}"#;
+        let parsed = evaluate(raw).unwrap();
+        assert_eq!(parsed.title, "T");
+        assert_eq!(parsed.body, "b");
+    }
+
+    #[test]
+    fn evaluate_rejects_unparseable() {
+        let f = evaluate("not json").unwrap_err();
+        assert!(matches!(f, DigestFailure::Unparseable(_)));
+    }
+
+    #[test]
+    fn evaluate_rejects_blank_title() {
+        let raw = r#"{"title":"   ","description":"d","tags":[],"body":"b"}"#;
+        let f = evaluate(raw).unwrap_err();
+        assert!(matches!(f, DigestFailure::EmptyField("title")));
+    }
+
+    #[test]
+    fn evaluate_rejects_blank_body() {
+        let raw = r#"{"title":"T","description":"d","tags":[],"body":""}"#;
+        let f = evaluate(raw).unwrap_err();
+        assert!(matches!(f, DigestFailure::EmptyField("body")));
+    }
+
+    #[test]
+    fn digest_failure_display_mentions_field() {
+        let f = DigestFailure::EmptyField("title");
+        assert!(format!("{f}").contains("title"));
+    }
+
+    #[test]
+    fn repair_prompt_includes_failure_raw_and_base() {
+        let base = "SOURCE:\nhello\n\nUSER NOTE: ";
+        let prompt = repair_user_prompt(base, "garbage reply", &DigestFailure::EmptyField("title"));
+        assert!(prompt.contains("\"title\" field was empty")); // the failure message, specifically
+        assert!(prompt.contains("garbage reply")); // the previous raw reply
+        assert!(prompt.contains("SOURCE:\nhello")); // the original message
+        assert!(prompt.contains("non-empty")); // the restated requirement
+    }
+
+    #[test]
+    fn repair_prompt_includes_unparseable_failure() {
+        let base = "SOURCE:\nx\n\nUSER NOTE: ";
+        let failure = DigestFailure::Unparseable("expected value at line 1".into());
+        let prompt = repair_user_prompt(base, "{ broken", &failure);
+        assert!(prompt.contains("expected value at line 1")); // the parser error surfaces
+        assert!(prompt.contains("{ broken")); // the previous raw reply
+    }
+
+    #[tokio::test]
+    async fn retries_after_unparseable_then_succeeds() {
+        let good = r#"{"title":"T","description":"d","tags":[],"body":"**TL;DR.** x"}"#;
+        let p = ScriptedProvider::new(vec!["not json".into(), good.into()]);
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
+        assert_eq!(r.page.frontmatter.title, Some("T".into()));
+        assert_eq!(p.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn retries_after_empty_title_then_succeeds() {
+        let blank = r#"{"title":"  ","description":"d","tags":[],"body":"b"}"#;
+        let good = r#"{"title":"T","description":"d","tags":[],"body":"b"}"#;
+        let p = ScriptedProvider::new(vec![blank.into(), good.into()]);
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
+        assert_eq!(r.page.frontmatter.title, Some("T".into()));
+        assert_eq!(p.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn fails_after_three_bad_attempts() {
+        let p = ScriptedProvider::new(vec!["bad1".into(), "bad2".into(), "bad3".into()]);
+        let err = digest(&p, "src", None, None, &[]).await.unwrap_err();
+        assert!(format!("{err}").contains("3 attempts"));
+        assert_eq!(p.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn transport_error_propagates_without_retry() {
+        // An empty queue makes the first complete() call error, standing in for
+        // a transport failure. It must propagate immediately with no retry.
+        let p = ScriptedProvider::new(vec![]);
+        let err = digest(&p, "src", None, None, &[]).await.unwrap_err();
+        assert!(format!("{err}").contains("exhausted"));
+        assert!(!format!("{err}").contains("attempts"));
+        assert_eq!(p.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn succeeds_on_first_attempt_without_retry() {
+        let good = r#"{"title":"T","description":"d","tags":[],"body":"b"}"#;
+        let p = ScriptedProvider::new(vec![good.into()]);
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
+        assert_eq!(r.page.frontmatter.title, Some("T".into()));
+        assert_eq!(p.calls(), 1);
     }
 }
