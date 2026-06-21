@@ -179,6 +179,7 @@
   }
   function dragEnd() {
     if (!dragging) return;
+    leaveNode();
     sim?.alphaTarget(0);
     const n = dragging;
     n.fx = null;
@@ -205,6 +206,7 @@
       on:pointerdown={canvasDown}
       on:pointermove={canvasMove}
       on:pointerup={canvasUp}
+      on:pointercancel={canvasUp}
       role="application"
       aria-label="Concept graph"
     >
@@ -235,7 +237,7 @@
             on:pointerdown={(e) => nodeDown(e, n)}
             on:pointerenter={() => enterNode(n)}
             on:pointerleave={leaveNode}
-            on:keydown={(e) => e.key === "Enter" && openNode(n)}
+            on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openNode(n)}
           >
             <circle cx="3" cy="3" r={n.r} fill="#111" />
             <circle r={n.r} fill={fillNode(n.path)} stroke="#111" stroke-width="3" />
