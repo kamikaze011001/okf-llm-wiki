@@ -144,6 +144,15 @@
     panning = false;
     if (dragging) dragEnd();
   }
+  function canvasCancel() {
+    panning = false;
+    if (!dragging) return;
+    leaveNode();
+    sim?.alphaTarget(0);
+    dragging.fx = null;
+    dragging.fy = null;
+    dragging = null;
+  }
 
   // ---- node drag (distinguished from click by movement threshold) ----
   let dragging: SimNode | null = null;
@@ -206,7 +215,7 @@
       on:pointerdown={canvasDown}
       on:pointermove={canvasMove}
       on:pointerup={canvasUp}
-      on:pointercancel={canvasUp}
+      on:pointercancel={canvasCancel}
       role="application"
       aria-label="Concept graph"
     >
