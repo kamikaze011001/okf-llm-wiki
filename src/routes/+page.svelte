@@ -4,6 +4,7 @@
   import Browse from "$lib/components/Browse.svelte";
   import Ask from "$lib/components/Ask.svelte";
   import Settings from "$lib/components/Settings.svelte";
+  import Graph from "$lib/components/Graph.svelte";
   import { route } from "$lib/stores";
 </script>
 
@@ -15,5 +16,6 @@
     {#if $route==="browse"}<Browse />{/if}
     {#if $route==="ask"}<Ask />{/if}
     {#if $route==="settings"}<Settings />{/if}
+    {#if $route==="graph"}<Graph />{/if}
   </div>
 </main>
