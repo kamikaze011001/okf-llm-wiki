@@ -5,9 +5,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 pub struct OpenRouterProvider {
-    pub api_key: String,
-    pub model: String, // e.g. "openai/gpt-4o"
-    pub client: reqwest::Client,
+    pub(crate) api_key: String,
+    pub(crate) model: String, // e.g. "openai/gpt-4o"
+    pub(crate) client: reqwest::Client,
 }
 
 impl OpenRouterProvider {
