@@ -40,7 +40,8 @@ pub fn run() {
             commands::ask_question,
             commands::reindex,
             commands::update_page,
-            commands::delete_page
+            commands::delete_page,
+            commands::create_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

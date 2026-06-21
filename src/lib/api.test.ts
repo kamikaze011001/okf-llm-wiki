@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (_cmd, args) => ({ echoed: args })) }));
-import { listPages, submitSource, setSettings, getPageView, reindex, updatePage, deletePage } from "./api";
+import { listPages, submitSource, setSettings, getPageView, reindex, updatePage, deletePage, createPage } from "./api";
 import { invoke } from "@tauri-apps/api/core";
 
 describe("api", () => {
@@ -38,5 +38,9 @@ describe("api", () => {
   it("deletePage invokes the delete_page command", async () => {
     await deletePage("concepts/a.md");
     expect(invoke).toHaveBeenCalledWith("delete_page", { path: "concepts/a.md" });
+  });
+  it("createPage invokes the create_page command", async () => {
+    await createPage("Ghost");
+    expect(invoke).toHaveBeenCalledWith("create_page", { title: "Ghost" });
   });
 });
