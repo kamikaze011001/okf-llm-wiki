@@ -80,6 +80,29 @@ pub struct ConceptRef {
     pub title: String,
 }
 
+/// A concept page as a graph node. `degree` counts undirected `[[link]]` edges touching it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNode {
+    pub path: String,
+    pub title: String,
+    pub degree: usize,
+}
+
+/// An undirected `[[link]]` edge between two existing pages. `source`/`target` are page
+/// paths ordered lexically — the direction is not semantically meaningful.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
+/// The whole-wiki concept graph: every existing page plus its deduped link edges.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GraphData {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
 /// Resolved link graph for the whole wiki. Built from disk, held in memory.
 #[derive(Debug, Clone, Default)]
 pub struct LinkGraph {
@@ -123,6 +146,63 @@ impl LinkGraph {
 
     pub fn exists(&self, slug: &str) -> bool {
         self.slug_to_path.contains_key(slug)
+    }
+
+    /// The whole-wiki concept graph. Nodes are all existing pages (orphans included,
+    /// degree 0). Edges are `[[link]]`s between existing pages: undirected, deduplicated
+    /// (a mutual A<->B link is one edge), self-links and unresolved targets excluded.
+    /// Nodes and edges are sorted by path for deterministic output.
+    pub fn graph_data(&self) -> GraphData {
+        // Collect undirected, deduped edges keyed by the lexically-ordered pair of paths.
+        let mut pairs: HashSet<(String, String)> = HashSet::new();
+        for (target_slug, sources) in &self.backlinks {
+            let Some(target_path) = self.slug_to_path.get(target_slug) else {
+                continue; // unresolved target
+            };
+            for source_path in sources {
+                if source_path == target_path {
+                    continue; // self-link (defensive)
+                }
+                let pair = if source_path <= target_path {
+                    (source_path.clone(), target_path.clone())
+                } else {
+                    (target_path.clone(), source_path.clone())
+                };
+                pairs.insert(pair);
+            }
+        }
+
+        // Degree per page from the deduped pairs.
+        let mut degree: HashMap<String, usize> = HashMap::new();
+        for (a, b) in &pairs {
+            *degree.entry(a.clone()).or_default() += 1;
+            *degree.entry(b.clone()).or_default() += 1;
+        }
+
+        let mut nodes: Vec<GraphNode> = self
+            .slug_to_path
+            .iter()
+            .map(|(slug, path)| GraphNode {
+                path: path.clone(),
+                title: self
+                    .slug_to_title
+                    .get(slug)
+                    .cloned()
+                    .unwrap_or_else(|| slug.clone()),
+                degree: degree.get(path).copied().unwrap_or(0),
+            })
+            .collect();
+        nodes.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let mut edges: Vec<GraphEdge> = pairs
+            .into_iter()
+            .map(|(source, target)| GraphEdge { source, target })
+            .collect();
+        edges.sort_by(|a, b| {
+            (a.source.as_str(), a.target.as_str()).cmp(&(b.source.as_str(), b.target.as_str()))
+        });
+
+        GraphData { nodes, edges }
     }
 
     /// Pages that link to `path`, resolved to `{path, title}`, sorted by path.
@@ -394,5 +474,78 @@ mod tests {
     fn validate_is_case_insensitive_via_slug() {
         let known: std::collections::HashSet<String> = ["alpha".to_string()].into_iter().collect();
         assert_eq!(validate_links("[[ALPHA]]", &known), "[[ALPHA]]");
+    }
+
+    #[test]
+    fn graph_data_nodes_edges_and_degree() {
+        let store = OkfStore::new(tmp());
+        store
+            .write_page(&page(
+                "concepts/alpha.md",
+                "Alpha",
+                "links [[Beta]] and [[Gamma]], and itself [[Alpha]].",
+            ))
+            .unwrap();
+        store
+            .write_page(&page(
+                "concepts/beta.md",
+                "Beta",
+                "links back to [[Alpha]].",
+            ))
+            .unwrap();
+        store
+            .write_page(&page("concepts/gamma.md", "Gamma", "no links here."))
+            .unwrap();
+        store
+            .write_page(&page(
+                "concepts/orphan.md",
+                "Orphan",
+                "alone, mentions [[Ghost]].",
+            ))
+            .unwrap();
+        let data = build_link_graph(&store).unwrap().graph_data();
+
+        // All four existing pages are nodes (orphan included), sorted by path.
+        let node_paths: Vec<&str> = data.nodes.iter().map(|n| n.path.as_str()).collect();
+        assert_eq!(
+            node_paths,
+            vec![
+                "concepts/alpha.md",
+                "concepts/beta.md",
+                "concepts/gamma.md",
+                "concepts/orphan.md",
+            ]
+        );
+
+        // Edges: Alpha-Beta is mutual -> one edge; Alpha-Gamma; no edge to unresolved
+        // Ghost; no self-loop from Alpha's own [[Alpha]].
+        assert_eq!(
+            data.edges,
+            vec![
+                GraphEdge {
+                    source: "concepts/alpha.md".into(),
+                    target: "concepts/beta.md".into()
+                },
+                GraphEdge {
+                    source: "concepts/alpha.md".into(),
+                    target: "concepts/gamma.md".into()
+                },
+            ]
+        );
+
+        // Degrees from the deduped edge set.
+        let deg = |p: &str| data.nodes.iter().find(|n| n.path == p).unwrap().degree;
+        assert_eq!(deg("concepts/alpha.md"), 2);
+        assert_eq!(deg("concepts/beta.md"), 1);
+        assert_eq!(deg("concepts/gamma.md"), 1);
+        assert_eq!(deg("concepts/orphan.md"), 0);
+    }
+
+    #[test]
+    fn graph_data_empty_store_is_empty() {
+        let store = OkfStore::new(tmp());
+        let data = build_link_graph(&store).unwrap().graph_data();
+        assert!(data.nodes.is_empty());
+        assert!(data.edges.is_empty());
     }
 }
