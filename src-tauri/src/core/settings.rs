@@ -12,7 +12,7 @@ fn default_ollama_url() -> String {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
-    pub provider: String, // "claude" | "openai" | "ollama"
+    pub provider: String, // "claude" | "openrouter"
     pub model: String,
     pub api_key: String,
     pub wiki_path: String,
