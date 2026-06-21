@@ -23,3 +23,4 @@ export const updatePage = (path: string, title: string | undefined, tags: string
 export const deletePage = (path: string) => invoke<void>("delete_page", { path });
 export const createPage = (title: string) => invoke<PageDto>("create_page", { title });
 export const getGraph = () => invoke<GraphData>("get_graph");
+export const listOpenRouterModels = () => invoke<ModelInfo[]>("list_openrouter_models");
