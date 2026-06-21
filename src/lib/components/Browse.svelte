@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import { listPages, getPageView, updatePage, deletePage, createPage, type PageDto, type PageView } from "$lib/api";
   import { currentPage } from "$lib/stores";
+  import Spinner from "$lib/components/Spinner.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
   let pages: PageDto[] = [];
   let view: PageView | undefined;
   let mounted = false;
@@ -22,10 +24,12 @@
   onMount(async () => { pages = await listPages(); mounted = true; });
   $: selectedPath = $currentPage ?? pages[0]?.path ?? null;
   $: if (mounted) loadFor(selectedPath);
+  let loadingView = false;
   async function loadFor(path: string | null) {
     if (!path) { view = undefined; return; }
     const enterEdit = pendingEdit;
     pendingEdit = false;
+    loadingView = true;
     try {
       view = await getPageView(path);
       mode = "view";
@@ -35,6 +39,7 @@
       if (enterEdit) startEdit();
     } finally {
       creating = false;
+      loadingView = false;
     }
   }
   function go(path: string) { currentPage.set(path); }
@@ -132,8 +137,10 @@
       <button class="nb-btn" on:click={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
       <button class="nb-btn" on:click={() => (mode = "view")} disabled={saving}>Cancel</button>
     </div>
+  {:else if loadingView || !mounted}
+    <Spinner label="Loading…" />
   {:else}
-    <p>No pages yet — capture something from Home.</p>
+    <EmptyState title="Nothing here yet" subtext="Capture something from Home to start browsing." />
   {/if}
 </section>
 

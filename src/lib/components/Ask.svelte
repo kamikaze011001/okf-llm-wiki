@@ -1,5 +1,7 @@
 <script lang="ts">
   import { askQuestion, type AnswerDto } from "$lib/api";
+  import Spinner from "$lib/components/Spinner.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
   let q = ""; let busy = false; let answer: AnswerDto | undefined;
   async function send(){ if(!q.trim()) return; busy = true; try { answer = await askQuestion(q); } finally { busy = false; } }
 </script>
@@ -7,11 +9,14 @@
   <h1>Ask your wiki</h1>
   <div class="nb-card">
     <input class="nb-input" placeholder="Ask anything from your knowledge…" bind:value={q} on:keydown={(e)=> e.key==="Enter" && send()} />
-    <button class="nb-btn accent" style="margin-top:12px" on:click={send} disabled={busy}>{busy?"Thinking…":"Ask"}</button>
+    <button class="nb-btn accent" style="margin-top:12px" on:click={send} disabled={busy}>Ask</button>
+    {#if busy}<div style="margin-top:12px"><Spinner label="Thinking…" /></div>{/if}
   </div>
   {#if answer}
     <article class="nb-card" style="margin-top:16px;white-space:pre-wrap">{answer.text}</article>
     <h3 style="margin-top:12px">Sources</h3>
     {#each answer.citations as c}<span class="nb-chip">{c}</span>{/each}
+  {:else if !busy}
+    <EmptyState title="Ask your knowledge base" subtext="Answers are grounded in the pages you've captured." />
   {/if}
 </section>

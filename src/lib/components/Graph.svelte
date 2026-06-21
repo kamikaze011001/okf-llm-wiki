@@ -11,6 +11,7 @@
   import { getGraph } from "$lib/api";
   import { buildGraphModel, type SimNode, type SimLink } from "$lib/graph-model";
   import { route, currentPage } from "$lib/stores";
+  import EmptyState from "$lib/components/EmptyState.svelte";
 
   let nodes: SimNode[] = [];
   let links: SimLink[] = [];
@@ -204,7 +205,7 @@
   {:else if error}
     <div class="nb-card" style="margin:32px;background:#c0392b;color:#fff">{error}</div>
   {:else if nodes.length === 0}
-    <div class="nb-card" style="margin:32px">No concepts yet — capture something from Home.</div>
+    <EmptyState title="No concepts yet" subtext="Capture something from Home." />
   {:else}
     <svg
       bind:this={svgEl}
