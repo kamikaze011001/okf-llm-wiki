@@ -42,7 +42,8 @@ pub fn run() {
             commands::update_page,
             commands::delete_page,
             commands::create_page,
-            commands::get_graph
+            commands::get_graph,
+            commands::list_openrouter_models
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
