@@ -64,8 +64,7 @@
   <main style="display:flex">
     <Rail />
     <div style="flex:1">
-      {#if $route==="home"}<Home />{/if}
-      {#if $route==="capture"}<Home />{/if}
+      {#if $route==="home" || $route==="capture"}<Home />{/if}
       {#if $route==="browse"}<Browse />{/if}
       {#if $route==="ask"}<Ask />{/if}
       {#if $route==="settings"}<Settings />{/if}

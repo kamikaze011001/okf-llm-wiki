@@ -137,7 +137,7 @@
       <button class="nb-btn" on:click={saveEdit} disabled={saving}>{saving ? "Saving…" : "Save"}</button>
       <button class="nb-btn" on:click={() => (mode = "view")} disabled={saving}>Cancel</button>
     </div>
-  {:else if loadingView}
+  {:else if loadingView || !mounted}
     <Spinner label="Loading…" />
   {:else}
     <EmptyState title="Nothing here yet" subtext="Capture something from Home to start browsing." />

@@ -35,6 +35,12 @@ describe("shouldInterceptPaste", () => {
   it("false for input", () => expect(shouldInterceptPaste(document.createElement("input"))).toBe(false));
   it("false for textarea", () => expect(shouldInterceptPaste(document.createElement("textarea"))).toBe(false));
   it("false for select", () => expect(shouldInterceptPaste(document.createElement("select"))).toBe(false));
+  it("false for contentEditable", () => {
+    // jsdom does not implement isContentEditable, so stub the getter the helper reads.
+    const el = document.createElement("div");
+    Object.defineProperty(el, "isContentEditable", { value: true });
+    expect(shouldInterceptPaste(el)).toBe(false);
+  });
   it("true for div", () => expect(shouldInterceptPaste(document.createElement("div"))).toBe(true));
   it("true for null", () => expect(shouldInterceptPaste(null)).toBe(true));
 });
