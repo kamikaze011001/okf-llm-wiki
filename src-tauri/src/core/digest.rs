@@ -48,6 +48,19 @@ fn evaluate(raw: &str) -> std::result::Result<DigestJson, DigestFailure> {
     Ok(parsed)
 }
 
+/// Build the retry user message: name the failure, echo the previous reply,
+/// restate the JSON requirement, then re-append the original user message so the
+/// model still has the source material.
+fn repair_user_prompt(base_user: &str, prev_raw: &str, failure: &DigestFailure) -> String {
+    format!(
+        "Your previous reply could not be used: {failure}.\n\n\
+         Previous reply:\n{prev_raw}\n\n\
+         Respond ONLY with valid JSON {{\"title\":..,\"description\":..,\"tags\":[..],\"body\":..}}. \
+         Both \"title\" and \"body\" must be non-empty.\n\n\
+         {base_user}"
+    )
+}
+
 pub struct DigestResult {
     pub page: Page,
     pub log_entry: String,
@@ -291,5 +304,24 @@ mod tests {
     fn digest_failure_display_mentions_field() {
         let f = DigestFailure::EmptyField("title");
         assert!(format!("{f}").contains("title"));
+    }
+
+    #[test]
+    fn repair_prompt_includes_failure_raw_and_base() {
+        let base = "SOURCE:\nhello\n\nUSER NOTE: ";
+        let prompt = repair_user_prompt(base, "garbage reply", &DigestFailure::EmptyField("title"));
+        assert!(prompt.contains("\"title\" field was empty")); // the failure message, specifically
+        assert!(prompt.contains("garbage reply")); // the previous raw reply
+        assert!(prompt.contains("SOURCE:\nhello")); // the original message
+        assert!(prompt.contains("non-empty")); // the restated requirement
+    }
+
+    #[test]
+    fn repair_prompt_includes_unparseable_failure() {
+        let base = "SOURCE:\nx\n\nUSER NOTE: ";
+        let failure = DigestFailure::Unparseable("expected value at line 1".into());
+        let prompt = repair_user_prompt(base, "{ broken", &failure);
+        assert!(prompt.contains("expected value at line 1")); // the parser error surfaces
+        assert!(prompt.contains("{ broken")); // the previous raw reply
     }
 }
