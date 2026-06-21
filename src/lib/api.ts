@@ -9,6 +9,7 @@ export interface PageView { path: string; title: string; body: string; tags: str
 export interface GraphNode { path: string; title: string; degree: number; }
 export interface GraphEdge { source: string; target: string; }
 export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; }
+export interface ModelInfo { id: string; name: string; }
 
 export const listPages = () => invoke<PageDto[]>("list_pages");
 export const getPageView = (path: string) => invoke<PageView>("get_page_view", { path });
