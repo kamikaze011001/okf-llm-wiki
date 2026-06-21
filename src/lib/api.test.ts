@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async (_cmd, args) => ({ echoed: args })) }));
-import { listPages, submitSource, setSettings, getPageView, reindex, updatePage, deletePage, createPage } from "./api";
+import { listPages, submitSource, setSettings, getPageView, reindex, updatePage, deletePage, createPage, getGraph } from "./api";
 import { invoke } from "@tauri-apps/api/core";
 
 describe("api", () => {
@@ -42,5 +42,9 @@ describe("api", () => {
   it("createPage invokes the create_page command", async () => {
     await createPage("Ghost");
     expect(invoke).toHaveBeenCalledWith("create_page", { title: "Ghost" });
+  });
+  it("getGraph invokes the get_graph command", async () => {
+    await getGraph();
+    expect(invoke).toHaveBeenCalledWith("get_graph");
   });
 });
