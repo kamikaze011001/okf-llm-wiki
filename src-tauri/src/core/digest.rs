@@ -7,12 +7,45 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 
 /// JSON contract the LLM must return.
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct DigestJson {
     title: String,
     description: String,
     tags: Vec<String>,
     body: String,
+}
+
+/// Why a raw LLM reply could not be turned into a usable digest.
+#[derive(Debug)]
+enum DigestFailure {
+    /// The reply did not contain parseable digest JSON; carries the parser error.
+    Unparseable(String),
+    /// Parsed, but a required field was blank after trimming.
+    EmptyField(&'static str),
+}
+
+impl std::fmt::Display for DigestFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DigestFailure::Unparseable(e) => write!(f, "reply was not valid digest JSON: {e}"),
+            DigestFailure::EmptyField(field) => write!(f, "the \"{field}\" field was empty"),
+        }
+    }
+}
+
+/// Parse + validate a raw LLM reply into a `DigestJson`, or report why it failed.
+/// Reuses `extract_json` to peel ```fences```/prose, then requires non-empty
+/// `title` and `body` after trimming.
+fn evaluate(raw: &str) -> std::result::Result<DigestJson, DigestFailure> {
+    let parsed: DigestJson = serde_json::from_str(extract_json(raw))
+        .map_err(|e| DigestFailure::Unparseable(e.to_string()))?;
+    if parsed.title.trim().is_empty() {
+        return Err(DigestFailure::EmptyField("title"));
+    }
+    if parsed.body.trim().is_empty() {
+        return Err(DigestFailure::EmptyField("body"));
+    }
+    Ok(parsed)
 }
 
 pub struct DigestResult {
@@ -224,5 +257,39 @@ mod tests {
     fn extract_json_handles_braces_inside_strings() {
         let raw = "noise {\"body\":\"a } b\",\"x\":1} trailing";
         assert_eq!(extract_json(raw), "{\"body\":\"a } b\",\"x\":1}");
+    }
+
+    #[test]
+    fn evaluate_accepts_valid_json() {
+        let raw = r#"{"title":"T","description":"d","tags":["a"],"body":"b"}"#;
+        let parsed = evaluate(raw).unwrap();
+        assert_eq!(parsed.title, "T");
+        assert_eq!(parsed.body, "b");
+    }
+
+    #[test]
+    fn evaluate_rejects_unparseable() {
+        let f = evaluate("not json").unwrap_err();
+        assert!(matches!(f, DigestFailure::Unparseable(_)));
+    }
+
+    #[test]
+    fn evaluate_rejects_blank_title() {
+        let raw = r#"{"title":"   ","description":"d","tags":[],"body":"b"}"#;
+        let f = evaluate(raw).unwrap_err();
+        assert!(matches!(f, DigestFailure::EmptyField("title")));
+    }
+
+    #[test]
+    fn evaluate_rejects_blank_body() {
+        let raw = r#"{"title":"T","description":"d","tags":[],"body":""}"#;
+        let f = evaluate(raw).unwrap_err();
+        assert!(matches!(f, DigestFailure::EmptyField("body")));
+    }
+
+    #[test]
+    fn digest_failure_display_mentions_field() {
+        let f = DigestFailure::EmptyField("title");
+        assert!(format!("{f}").contains("title"));
     }
 }
