@@ -9,6 +9,7 @@ export interface PageView { path: string; title: string; body: string; tags: str
 export interface GraphNode { path: string; title: string; degree: number; }
 export interface GraphEdge { source: string; target: string; }
 export interface GraphData { nodes: GraphNode[]; edges: GraphEdge[]; }
+export interface ModelInfo { id: string; name: string; }
 
 export const listPages = () => invoke<PageDto[]>("list_pages");
 export const getPageView = (path: string) => invoke<PageView>("get_page_view", { path });
@@ -22,3 +23,4 @@ export const updatePage = (path: string, title: string | undefined, tags: string
 export const deletePage = (path: string) => invoke<void>("delete_page", { path });
 export const createPage = (title: string) => invoke<PageDto>("create_page", { title });
 export const getGraph = () => invoke<GraphData>("get_graph");
+export const listOpenRouterModels = () => invoke<ModelInfo[]>("list_openrouter_models");

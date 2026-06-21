@@ -8,3 +8,4 @@ pub trait LlmProvider: Send + Sync {
 
 pub mod claude;
 pub mod fake;
+pub mod openrouter;

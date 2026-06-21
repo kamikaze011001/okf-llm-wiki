@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 pub struct ClaudeProvider {
-    pub api_key: String,
-    pub model: String, // e.g. "claude-opus-4-8"
-    pub client: reqwest::Client,
+    pub(crate) api_key: String,
+    pub(crate) model: String, // e.g. "claude-opus-4-8"
+    pub(crate) client: reqwest::Client,
 }
 
 impl ClaudeProvider {

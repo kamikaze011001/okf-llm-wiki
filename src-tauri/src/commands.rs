@@ -7,6 +7,7 @@ use crate::core::{
     fetch::fetch_clean,
     index_store::{self, rebuild_index},
     links::{build_link_graph, segment_body, Segment},
+    provider::openrouter::{fetch_models, ModelInfo},
     retrieval::search,
     settings::{make_provider, Settings},
     slug::slugify,
@@ -386,4 +387,14 @@ pub async fn create_page(state: State<'_, AppState>, title: String) -> Result<Pa
         note: page.frontmatter.note,
         resource: page.frontmatter.resource,
     })
+}
+
+/// List OpenRouter's public model catalog for the Settings model picker.
+/// The `/models` endpoint is keyless, so this takes no arguments and touches no
+/// shared state — there is no `MutexGuard` held across the `.await`.
+#[tauri::command]
+pub async fn list_openrouter_models() -> Result<Vec<ModelInfo>, String> {
+    fetch_models(&reqwest::Client::new())
+        .await
+        .map_err(|e| e.to_string())
 }

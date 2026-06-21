@@ -12,7 +12,7 @@ fn default_ollama_url() -> String {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
-    pub provider: String, // "claude" | "openai" | "ollama"
+    pub provider: String, // "claude" | "openrouter"
     pub model: String,
     pub api_key: String,
     pub wiki_path: String,
@@ -53,13 +53,17 @@ impl Default for Settings {
     }
 }
 
-use crate::core::provider::{claude::ClaudeProvider, LlmProvider};
+use crate::core::provider::{claude::ClaudeProvider, openrouter::OpenRouterProvider, LlmProvider};
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
 
 pub fn make_provider(s: &Settings) -> Result<Arc<dyn LlmProvider>> {
     match s.provider.as_str() {
         "claude" => Ok(Arc::new(ClaudeProvider::new(
+            s.api_key.clone(),
+            s.model.clone(),
+        ))),
+        "openrouter" => Ok(Arc::new(OpenRouterProvider::new(
             s.api_key.clone(),
             s.model.clone(),
         ))),
@@ -117,5 +121,23 @@ mod tests {
         assert_eq!(back.embed_provider, "ollama");
         assert_eq!(back.embed_model, "nomic-embed-text");
         assert_eq!(back.ollama_url, "http://localhost:11434");
+    }
+
+    #[test]
+    fn make_provider_supports_openrouter() {
+        let s = Settings {
+            provider: "openrouter".into(),
+            ..Settings::default()
+        };
+        assert!(make_provider(&s).is_ok());
+    }
+
+    #[test]
+    fn make_provider_rejects_unknown() {
+        let s = Settings {
+            provider: "nope".into(),
+            ..Settings::default()
+        };
+        assert!(make_provider(&s).is_err());
     }
 }
