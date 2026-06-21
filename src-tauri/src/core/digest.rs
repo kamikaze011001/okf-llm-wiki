@@ -61,6 +61,36 @@ fn repair_user_prompt(base_user: &str, prev_raw: &str, failure: &DigestFailure) 
     )
 }
 
+/// Call the provider up to `max_attempts` times, feeding each failure back as a
+/// repair prompt, and return the first reply that passes `evaluate`. Transport
+/// errors propagate immediately. Returns an error naming the attempt count if
+/// every attempt fails validation.
+async fn run_digest_attempts(
+    provider: &dyn LlmProvider,
+    system: &str,
+    base_user: &str,
+    max_attempts: usize,
+) -> Result<DigestJson> {
+    let mut last: Option<(String, DigestFailure)> = None;
+    for _ in 1..=max_attempts {
+        let user = match &last {
+            None => base_user.to_string(),
+            Some((prev_raw, failure)) => repair_user_prompt(base_user, prev_raw, failure),
+        };
+        let raw = provider.complete(system, &user).await?;
+        match evaluate(&raw) {
+            Ok(parsed) => return Ok(parsed),
+            Err(failure) => last = Some((raw, failure)),
+        }
+    }
+    // Loop exhausted without success: report the last failure.
+    let failure = last.expect("at least one attempt ran").1;
+    Err(anyhow!(
+        "digest failed after {max_attempts} attempts: {failure}"
+    ))
+}
+
+#[derive(Debug)]
 pub struct DigestResult {
     pub page: Page,
     pub log_entry: String,
@@ -97,9 +127,8 @@ pub async fn digest(
         "SOURCE:\n{source_text}\n\nUSER NOTE: {}",
         note.unwrap_or("")
     );
-    let raw = provider.complete(&system, &user).await?;
-    let parsed: DigestJson = serde_json::from_str(extract_json(&raw))
-        .map_err(|e| anyhow!("LLM did not return valid digest JSON: {e}; got: {raw}"))?;
+    const MAX_ATTEMPTS: usize = 3;
+    let parsed = run_digest_attempts(provider, &system, &user, MAX_ATTEMPTS).await?;
     let slug = slugify(&parsed.title);
     // Keep only links to existing concepts or this page itself; drop hallucinated ones.
     let mut known: HashSet<String> = existing.iter().map(|c| c.slug.clone()).collect();
@@ -183,6 +212,7 @@ mod tests {
     use super::*;
     use crate::core::links::ConceptRef;
     use crate::core::provider::fake::FakeProvider;
+    use crate::core::provider::fake::ScriptedProvider;
 
     #[test]
     fn system_prompt_lists_existing_titles_with_link_instruction() {
@@ -323,5 +353,41 @@ mod tests {
         let prompt = repair_user_prompt(base, "{ broken", &failure);
         assert!(prompt.contains("expected value at line 1")); // the parser error surfaces
         assert!(prompt.contains("{ broken")); // the previous raw reply
+    }
+
+    #[tokio::test]
+    async fn retries_after_unparseable_then_succeeds() {
+        let good = r#"{"title":"T","description":"d","tags":[],"body":"**TL;DR.** x"}"#;
+        let p = ScriptedProvider::new(vec!["not json".into(), good.into()]);
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
+        assert_eq!(r.page.frontmatter.title, Some("T".into()));
+        assert_eq!(p.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn retries_after_empty_title_then_succeeds() {
+        let blank = r#"{"title":"  ","description":"d","tags":[],"body":"b"}"#;
+        let good = r#"{"title":"T","description":"d","tags":[],"body":"b"}"#;
+        let p = ScriptedProvider::new(vec![blank.into(), good.into()]);
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
+        assert_eq!(r.page.frontmatter.title, Some("T".into()));
+        assert_eq!(p.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn fails_after_three_bad_attempts() {
+        let p = ScriptedProvider::new(vec!["bad1".into(), "bad2".into(), "bad3".into()]);
+        let err = digest(&p, "src", None, None, &[]).await.unwrap_err();
+        assert!(format!("{err}").contains("3 attempts"));
+        assert_eq!(p.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn succeeds_on_first_attempt_without_retry() {
+        let good = r#"{"title":"T","description":"d","tags":[],"body":"b"}"#;
+        let p = ScriptedProvider::new(vec![good.into()]);
+        let r = digest(&p, "src", None, None, &[]).await.unwrap();
+        assert_eq!(r.page.frontmatter.title, Some("T".into()));
+        assert_eq!(p.calls(), 1);
     }
 }
