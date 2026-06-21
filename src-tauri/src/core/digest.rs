@@ -84,7 +84,7 @@ async fn run_digest_attempts(
         }
     }
     // Loop exhausted without success: report the last failure.
-    let failure = last.expect("at least one attempt ran").1;
+    let (_, failure) = last.expect("at least one attempt ran");
     Err(anyhow!(
         "digest failed after {max_attempts} attempts: {failure}"
     ))
@@ -380,6 +380,17 @@ mod tests {
         let err = digest(&p, "src", None, None, &[]).await.unwrap_err();
         assert!(format!("{err}").contains("3 attempts"));
         assert_eq!(p.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn transport_error_propagates_without_retry() {
+        // An empty queue makes the first complete() call error, standing in for
+        // a transport failure. It must propagate immediately with no retry.
+        let p = ScriptedProvider::new(vec![]);
+        let err = digest(&p, "src", None, None, &[]).await.unwrap_err();
+        assert!(format!("{err}").contains("exhausted"));
+        assert!(!format!("{err}").contains("attempts"));
+        assert_eq!(p.calls(), 1);
     }
 
     #[tokio::test]
