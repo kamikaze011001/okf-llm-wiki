@@ -8,9 +8,9 @@
   import Graph from "$lib/components/Graph.svelte";
   import Onboarding from "$lib/components/Onboarding.svelte";
   import Spinner from "$lib/components/Spinner.svelte";
-  import { route, configured } from "$lib/stores";
+  import { route, configured, capturePrefill } from "$lib/stores";
   import { getSettings } from "$lib/api";
-  import { isConfigured } from "$lib/capture";
+  import { isConfigured, extractDropText, extractPasteText, shouldInterceptPaste } from "$lib/capture";
 
   let loading = true;
   onMount(async () => {
@@ -21,7 +21,38 @@
       loading = false;
     }
   });
+
+  function onKeydown(e: KeyboardEvent) {
+    if (!$configured) return;
+    if ((e.metaKey || e.ctrlKey) && (e.key === "n" || e.key === "N")) {
+      e.preventDefault();
+      route.set("capture");
+    }
+  }
+  function onDragOver(e: DragEvent) {
+    if (!$configured) return;
+    e.preventDefault(); // allow the drop event to fire
+  }
+  function onDrop(e: DragEvent) {
+    if (!$configured) return;
+    const text = extractDropText(e.dataTransfer);
+    if (!text) return;
+    e.preventDefault();
+    capturePrefill.set(text);
+    route.set("capture");
+  }
+  function onPaste(e: ClipboardEvent) {
+    if (!$configured) return;
+    if (!shouldInterceptPaste(e.target)) return;
+    const text = extractPasteText(e);
+    if (!text) return;
+    e.preventDefault();
+    capturePrefill.set(text);
+    route.set("capture");
+  }
 </script>
+
+<svelte:window on:keydown={onKeydown} on:dragover={onDragOver} on:drop={onDrop} on:paste={onPaste} />
 
 {#if loading}
   <main style="display:flex;align-items:center;justify-content:center;height:100vh">
