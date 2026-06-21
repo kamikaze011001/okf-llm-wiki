@@ -60,7 +60,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_openai_chat_body() {
+    fn builds_chat_body() {
         let p = OpenRouterProvider::new("k".into(), "openai/gpt-4o".into());
         let b = p.chat_body("be brief", "hi");
         assert_eq!(b["model"], "openai/gpt-4o");
