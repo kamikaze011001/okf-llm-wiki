@@ -2,7 +2,8 @@
   import { route, type Route } from "$lib/stores";
   const items: {id: Route; label: string}[] = [
     {id:"home",label:"Home"},{id:"capture",label:"＋ Capture"},
-    {id:"browse",label:"Browse"},{id:"ask",label:"Ask"},{id:"settings",label:"⚙ Settings"},
+    {id:"browse",label:"Browse"},{id:"graph",label:"Graph"},
+    {id:"ask",label:"Ask"},{id:"settings",label:"⚙ Settings"},
   ];
 </script>
 <nav style="width:150px;border-right:var(--border);background:var(--yellow);padding:12px;min-height:100vh">
