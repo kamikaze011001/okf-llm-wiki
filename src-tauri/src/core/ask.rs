@@ -4,6 +4,7 @@ use crate::core::provider::LlmProvider;
 use anyhow::Result;
 use serde::Deserialize;
 
+#[derive(Debug)]
 pub struct Answer {
     pub text: String,
     pub citations: Vec<String>,
@@ -20,10 +21,6 @@ enum Verdict {
     Abstain,
 }
 
-/// Why a raw judge reply could not be turned into a `Verdict`.
-#[derive(Debug)]
-struct VerdictError(String);
-
 /// Raw JSON shape the judge must return.
 #[derive(Deserialize)]
 struct VerdictJson {
@@ -33,16 +30,16 @@ struct VerdictJson {
 }
 
 /// Parse a raw judge reply into a `Verdict`, reusing `extract_json` to peel
-/// ```fences```/prose. An unparseable reply or unknown verdict word is an error;
-/// the caller treats that as fail-closed (abstain).
-fn parse_verdict(raw: &str) -> std::result::Result<Verdict, VerdictError> {
-    let vj: VerdictJson =
-        serde_json::from_str(extract_json(raw)).map_err(|e| VerdictError(e.to_string()))?;
+/// ```fences```/prose. `None` means the reply was unparseable or named an unknown
+/// verdict; the caller treats that as fail-closed (abstain). No error payload is
+/// carried — the fail-closed path discards it and nothing is logged.
+fn parse_verdict(raw: &str) -> Option<Verdict> {
+    let vj: VerdictJson = serde_json::from_str(extract_json(raw)).ok()?;
     match vj.verdict.trim().to_ascii_lowercase().as_str() {
-        "accept" => Ok(Verdict::Accept),
-        "revise" => Ok(Verdict::Revise(vj.feedback)),
-        "abstain" => Ok(Verdict::Abstain),
-        other => Err(VerdictError(format!("unknown verdict {other:?}"))),
+        "accept" => Some(Verdict::Accept),
+        "revise" => Some(Verdict::Revise(vj.feedback)),
+        "abstain" => Some(Verdict::Abstain),
+        _ => None,
     }
 }
 
@@ -104,33 +101,66 @@ fn filter_citations(answer: &str, hits: &[&Chunk]) -> Vec<String> {
     out
 }
 
-/// Ask the LLM to answer `question` grounded ONLY in the pre-retrieved `hits`.
-/// Citations are the hit page paths, de-duplicated, preserving rank order.
+/// Ask the LLM to answer `question` grounded ONLY in the pre-retrieved `hits`,
+/// verifying each draft with an LLM judge and retrying with feedback. Returns a
+/// grounded answer (citing only retrieved paths it used) or a canonical
+/// abstention when the wiki cannot ground an answer. Transport errors propagate.
 pub async fn ask(provider: &dyn LlmProvider, question: &str, hits: &[&Chunk]) -> Result<Answer> {
+    const MAX_ATTEMPTS: usize = 2;
+    run_ask_attempts(provider, question, hits, MAX_ATTEMPTS).await
+}
+
+/// Draft -> judge -> repair loop. Each iteration makes one draft call and one judge
+/// call (both propagate transport errors via `?`). `accept` returns the draft with
+/// filtered citations; `abstain`, an unparseable verdict, or attempt exhaustion
+/// returns the canonical abstention; `revise` re-drafts with feedback.
+async fn run_ask_attempts(
+    provider: &dyn LlmProvider,
+    question: &str,
+    hits: &[&Chunk],
+    max_attempts: usize,
+) -> Result<Answer> {
     let context = hits
         .iter()
         .map(|h| format!("[{}]\n{}", h.path, h.text))
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let mut citations: Vec<String> = Vec::new();
-    for h in hits {
-        if !citations.contains(&h.path) {
-            citations.push(h.path.clone());
+    let mut last: Option<(String, String)> = None; // (prev_draft, feedback)
+    for _ in 1..=max_attempts {
+        let user = match &last {
+            None => base_ask_prompt(question, &context),
+            Some((prev_draft, feedback)) => {
+                repair_ask_prompt(question, &context, prev_draft, feedback)
+            }
+        };
+        let draft = provider.complete(ANSWER_SYSTEM, &user).await?;
+
+        let verdict_user = judge_user_prompt(question, &context, &draft);
+        let verdict_raw = provider.complete(JUDGE_SYSTEM, &verdict_user).await?;
+
+        match parse_verdict(&verdict_raw) {
+            Some(Verdict::Accept) => {
+                let citations = filter_citations(&draft, hits);
+                return Ok(Answer {
+                    text: draft,
+                    citations,
+                });
+            }
+            Some(Verdict::Abstain) => return Ok(abstention()),
+            Some(Verdict::Revise(feedback)) => last = Some((draft, feedback)),
+            // Fail-closed: we cannot certify groundedness, so abstain.
+            None => return Ok(abstention()),
         }
     }
-
-    let system = "Answer ONLY from the provided wiki context. Cite the page paths you used in [brackets]. If the context does not contain the answer, say you don't know.";
-    let user = format!("QUESTION: {question}\n\nWIKI CONTEXT:\n{context}");
-    let text = provider.complete(system, &user).await?;
-    Ok(Answer { text, citations })
+    Ok(abstention())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::index_store::Chunk;
-    use crate::core::provider::fake::FakeProvider;
+    use crate::core::provider::fake::ScriptedProvider;
 
     fn chunk(path: &str, text: &str) -> Chunk {
         Chunk {
@@ -177,14 +207,14 @@ mod tests {
     fn parse_verdict_accept() {
         assert!(matches!(
             parse_verdict(r#"{"verdict":"accept"}"#),
-            Ok(Verdict::Accept)
+            Some(Verdict::Accept)
         ));
     }
 
     #[test]
     fn parse_verdict_revise_carries_feedback() {
         match parse_verdict(r#"{"verdict":"revise","feedback":"claim X unsupported"}"#) {
-            Ok(Verdict::Revise(f)) => assert_eq!(f, "claim X unsupported"),
+            Some(Verdict::Revise(f)) => assert_eq!(f, "claim X unsupported"),
             other => panic!("expected Revise, got {other:?}"),
         }
     }
@@ -193,7 +223,7 @@ mod tests {
     fn parse_verdict_abstain() {
         assert!(matches!(
             parse_verdict(r#"{"verdict":"abstain"}"#),
-            Ok(Verdict::Abstain)
+            Some(Verdict::Abstain)
         ));
     }
 
@@ -201,18 +231,18 @@ mod tests {
     fn parse_verdict_handles_fenced_json() {
         assert!(matches!(
             parse_verdict("```json\n{\"verdict\":\"accept\"}\n```"),
-            Ok(Verdict::Accept)
+            Some(Verdict::Accept)
         ));
     }
 
     #[test]
-    fn parse_verdict_unparseable_errs() {
-        assert!(parse_verdict("not json").is_err());
+    fn parse_verdict_unparseable_none() {
+        assert!(parse_verdict("not json").is_none());
     }
 
     #[test]
-    fn parse_verdict_unknown_verdict_errs() {
-        assert!(parse_verdict(r#"{"verdict":"maybe"}"#).is_err());
+    fn parse_verdict_unknown_verdict_none() {
+        assert!(parse_verdict(r#"{"verdict":"maybe"}"#).is_none());
     }
 
     #[test]
@@ -238,25 +268,87 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn answers_from_hits_and_dedupes_citations() {
-        let c0 = Chunk {
-            path: "concepts/vd.md".into(),
-            chunk_id: 0,
-            text: "Vitamin D helps sleep.".into(),
-            vector: vec![],
-        };
-        let c1 = Chunk {
-            path: "concepts/vd.md".into(),
-            chunk_id: 1,
-            text: "Take it in the morning.".into(),
-            vector: vec![],
-        };
+    async fn answers_from_hits_and_filters_citations() {
+        let c0 = chunk("concepts/vd.md", "Vitamin D helps sleep.");
+        let mut c1 = chunk("concepts/vd.md", "Take it in the morning.");
+        c1.chunk_id = 1;
         let hits: Vec<&Chunk> = vec![&c0, &c1];
-        let p = FakeProvider {
-            reply: "Morning dose [concepts/vd.md]".into(),
-        };
+        let p = ScriptedProvider::new(vec![
+            "Morning dose [concepts/vd.md]".into(),
+            r#"{"verdict":"accept"}"#.into(),
+        ]);
         let a = ask(&p, "when to take vitamin d", &hits).await.unwrap();
         assert!(a.text.contains("Morning"));
         assert_eq!(a.citations, vec!["concepts/vd.md".to_string()]);
+        assert_eq!(p.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn revise_then_accept() {
+        let c = chunk("concepts/a.md", "Fact A.");
+        let hits = vec![&c];
+        let p = ScriptedProvider::new(vec![
+            "ungrounded [concepts/a.md]".into(),
+            r#"{"verdict":"revise","feedback":"claim unsupported"}"#.into(),
+            "fixed answer [concepts/a.md]".into(),
+            r#"{"verdict":"accept"}"#.into(),
+        ]);
+        let a = ask(&p, "q", &hits).await.unwrap();
+        assert!(a.text.contains("fixed answer"));
+        assert_eq!(a.citations, vec!["concepts/a.md".to_string()]);
+        assert_eq!(p.calls(), 4);
+    }
+
+    #[tokio::test]
+    async fn judge_abstains_returns_canonical() {
+        let c = chunk("concepts/a.md", "Fact A.");
+        let hits = vec![&c];
+        let p = ScriptedProvider::new(vec![
+            "guess".into(),
+            r#"{"verdict":"abstain","feedback":"not in context"}"#.into(),
+        ]);
+        let a = ask(&p, "q", &hits).await.unwrap();
+        assert!(a.text.contains("couldn't find a grounded answer"));
+        assert!(a.citations.is_empty());
+        assert_eq!(p.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn exhaustion_abstains() {
+        let c = chunk("concepts/a.md", "Fact A.");
+        let hits = vec![&c];
+        let p = ScriptedProvider::new(vec![
+            "d1".into(),
+            r#"{"verdict":"revise","feedback":"bad"}"#.into(),
+            "d2".into(),
+            r#"{"verdict":"revise","feedback":"still bad"}"#.into(),
+        ]);
+        let a = ask(&p, "q", &hits).await.unwrap();
+        assert!(a.text.contains("couldn't find a grounded answer"));
+        assert!(a.citations.is_empty());
+        assert_eq!(p.calls(), 4);
+    }
+
+    #[tokio::test]
+    async fn unparseable_judge_abstains() {
+        let c = chunk("concepts/a.md", "Fact A.");
+        let hits = vec![&c];
+        let p = ScriptedProvider::new(vec!["answer [concepts/a.md]".into(), "not json".into()]);
+        let a = ask(&p, "q", &hits).await.unwrap();
+        assert!(a.text.contains("couldn't find a grounded answer"));
+        assert!(a.citations.is_empty());
+        assert_eq!(p.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn transport_error_propagates_without_retry() {
+        let c = chunk("concepts/a.md", "Fact A.");
+        let hits = vec![&c];
+        // Empty queue makes the first complete() call error, standing in for a
+        // transport failure: it must propagate, not abstain.
+        let p = ScriptedProvider::new(vec![]);
+        let err = ask(&p, "q", &hits).await.unwrap_err();
+        assert!(format!("{err}").contains("exhausted"));
+        assert_eq!(p.calls(), 1);
     }
 }
