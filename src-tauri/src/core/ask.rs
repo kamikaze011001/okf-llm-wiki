@@ -1,10 +1,49 @@
+use crate::core::digest::extract_json;
 use crate::core::index_store::Chunk;
 use crate::core::provider::LlmProvider;
 use anyhow::Result;
+use serde::Deserialize;
 
 pub struct Answer {
     pub text: String,
     pub citations: Vec<String>,
+}
+
+/// The judge's decision about a draft answer.
+#[derive(Debug)]
+enum Verdict {
+    /// The draft is grounded in the context; use it.
+    Accept,
+    /// The draft has unsupported claims; the string is feedback for the redraft.
+    Revise(String),
+    /// The context does not support an answer; respond that we don't know.
+    Abstain,
+}
+
+/// Why a raw judge reply could not be turned into a `Verdict`.
+#[derive(Debug)]
+struct VerdictError(String);
+
+/// Raw JSON shape the judge must return.
+#[derive(Deserialize)]
+struct VerdictJson {
+    verdict: String,
+    #[serde(default)]
+    feedback: String,
+}
+
+/// Parse a raw judge reply into a `Verdict`, reusing `extract_json` to peel
+/// ```fences```/prose. An unparseable reply or unknown verdict word is an error;
+/// the caller treats that as fail-closed (abstain).
+fn parse_verdict(raw: &str) -> std::result::Result<Verdict, VerdictError> {
+    let vj: VerdictJson =
+        serde_json::from_str(extract_json(raw)).map_err(|e| VerdictError(e.to_string()))?;
+    match vj.verdict.trim().to_ascii_lowercase().as_str() {
+        "accept" => Ok(Verdict::Accept),
+        "revise" => Ok(Verdict::Revise(vj.feedback)),
+        "abstain" => Ok(Verdict::Abstain),
+        other => Err(VerdictError(format!("unknown verdict {other:?}"))),
+    }
 }
 
 /// The retrieved paths the answer actually cited, in hits-rank order, de-duplicated.
@@ -89,6 +128,48 @@ mod tests {
         let hits = vec![&a0, &a1];
         let cites = filter_citations("[concepts/a.md]", &hits);
         assert_eq!(cites, vec!["concepts/a.md".to_string()]);
+    }
+
+    #[test]
+    fn parse_verdict_accept() {
+        assert!(matches!(
+            parse_verdict(r#"{"verdict":"accept"}"#),
+            Ok(Verdict::Accept)
+        ));
+    }
+
+    #[test]
+    fn parse_verdict_revise_carries_feedback() {
+        match parse_verdict(r#"{"verdict":"revise","feedback":"claim X unsupported"}"#) {
+            Ok(Verdict::Revise(f)) => assert_eq!(f, "claim X unsupported"),
+            other => panic!("expected Revise, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_verdict_abstain() {
+        assert!(matches!(
+            parse_verdict(r#"{"verdict":"abstain"}"#),
+            Ok(Verdict::Abstain)
+        ));
+    }
+
+    #[test]
+    fn parse_verdict_handles_fenced_json() {
+        assert!(matches!(
+            parse_verdict("```json\n{\"verdict\":\"accept\"}\n```"),
+            Ok(Verdict::Accept)
+        ));
+    }
+
+    #[test]
+    fn parse_verdict_unparseable_errs() {
+        assert!(parse_verdict("not json").is_err());
+    }
+
+    #[test]
+    fn parse_verdict_unknown_verdict_errs() {
+        assert!(parse_verdict(r#"{"verdict":"maybe"}"#).is_err());
     }
 
     #[tokio::test]
