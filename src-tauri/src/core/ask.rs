@@ -204,6 +204,13 @@ mod tests {
     }
 
     #[test]
+    fn filter_citations_empty_when_answer_has_no_citation_tokens() {
+        let a = chunk("concepts/a.md", "text");
+        let cites = filter_citations("no citations here", &[&a]);
+        assert!(cites.is_empty());
+    }
+
+    #[test]
     fn parse_verdict_accept() {
         assert!(matches!(
             parse_verdict(r#"{"verdict":"accept"}"#),
@@ -243,6 +250,14 @@ mod tests {
     #[test]
     fn parse_verdict_unknown_verdict_none() {
         assert!(parse_verdict(r#"{"verdict":"maybe"}"#).is_none());
+    }
+
+    #[test]
+    fn parse_verdict_case_insensitive() {
+        assert!(matches!(
+            parse_verdict(r#"{"verdict":"Accept"}"#),
+            Some(Verdict::Accept)
+        ));
     }
 
     #[test]
@@ -350,5 +365,17 @@ mod tests {
         let err = ask(&p, "q", &hits).await.unwrap_err();
         assert!(format!("{err}").contains("exhausted"));
         assert_eq!(p.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn judge_transport_error_propagates() {
+        let c = chunk("concepts/a.md", "Fact A.");
+        let hits = vec![&c];
+        // Draft succeeds, then the judge call exhausts the queue → transport-like Err
+        // from the second complete(). It must propagate, not abstain.
+        let p = ScriptedProvider::new(vec!["answer text".into()]);
+        let err = ask(&p, "q", &hits).await.unwrap_err();
+        assert!(format!("{err}").contains("exhausted"));
+        assert_eq!(p.calls(), 2);
     }
 }
