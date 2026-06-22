@@ -46,6 +46,49 @@ fn parse_verdict(raw: &str) -> std::result::Result<Verdict, VerdictError> {
     }
 }
 
+const ANSWER_SYSTEM: &str = "Answer the question using ONLY the provided wiki context. \
+Cite the page paths you used in [brackets], e.g. [concepts/foo.md]. \
+If the context does not contain the answer, say you don't know.";
+
+const JUDGE_SYSTEM: &str = "You are a strict grounding judge. Given a QUESTION, the \
+WIKI CONTEXT, and a DRAFT ANSWER, decide whether the draft is fully supported by the \
+context. Respond ONLY with JSON {\"verdict\":\"accept\"|\"revise\"|\"abstain\",\"feedback\":\"...\"}. \
+Use \"accept\" if every claim is supported by the context and any [bracketed] citations \
+refer to provided paths. Use \"abstain\" if the context does not contain the answer. \
+Use \"revise\" if the draft makes claims not supported by the context; put what is wrong \
+in \"feedback\".";
+
+/// The first-attempt draft user message.
+fn base_ask_prompt(question: &str, context: &str) -> String {
+    format!("QUESTION: {question}\n\nWIKI CONTEXT:\n{context}")
+}
+
+/// The retry draft message: name the grounding problem, echo the previous draft,
+/// restate the grounding rule, then re-append the question and context.
+fn repair_ask_prompt(question: &str, context: &str, prev_draft: &str, feedback: &str) -> String {
+    format!(
+        "Your previous answer was not adequately grounded: {feedback}.\n\n\
+         Previous answer:\n{prev_draft}\n\n\
+         Revise it. Use ONLY the wiki context below and cite page paths in [brackets]. \
+         Remove or correct any claim not supported by the context; if the context does \
+         not support an answer, say you don't know.\n\n\
+         QUESTION: {question}\n\nWIKI CONTEXT:\n{context}"
+    )
+}
+
+/// The judge user message: question + context + the draft to evaluate.
+fn judge_user_prompt(question: &str, context: &str, draft: &str) -> String {
+    format!("QUESTION: {question}\n\nWIKI CONTEXT:\n{context}\n\nDRAFT ANSWER:\n{draft}")
+}
+
+/// The canonical "couldn't ground it" answer, with no citations.
+fn abstention() -> Answer {
+    Answer {
+        text: "I couldn't find a grounded answer for this in your wiki.".to_string(),
+        citations: Vec::new(),
+    }
+}
+
 /// The retrieved paths the answer actually cited, in hits-rank order, de-duplicated.
 /// A `[path]` the answer cites that is not among `hits` is dropped (hallucinated).
 fn filter_citations(answer: &str, hits: &[&Chunk]) -> Vec<String> {
@@ -170,6 +213,28 @@ mod tests {
     #[test]
     fn parse_verdict_unknown_verdict_errs() {
         assert!(parse_verdict(r#"{"verdict":"maybe"}"#).is_err());
+    }
+
+    #[test]
+    fn repair_prompt_includes_feedback_and_prev_draft() {
+        let p = repair_ask_prompt("q", "CTXDATA", "OLD ANSWER", "claim X unsupported");
+        assert!(p.contains("claim X unsupported"));
+        assert!(p.contains("OLD ANSWER"));
+        assert!(p.contains("CTXDATA"));
+    }
+
+    #[test]
+    fn judge_prompt_includes_draft_and_context() {
+        let p = judge_user_prompt("q", "CTXDATA", "DRAFTDATA");
+        assert!(p.contains("CTXDATA"));
+        assert!(p.contains("DRAFTDATA"));
+    }
+
+    #[test]
+    fn abstention_has_empty_citations() {
+        let a = abstention();
+        assert!(a.citations.is_empty());
+        assert!(a.text.to_lowercase().contains("couldn't find"));
     }
 
     #[tokio::test]
