@@ -155,7 +155,7 @@ pub async fn digest(
 }
 
 /// Pull a JSON object out of an LLM reply that may wrap it in ```fences``` or prose.
-fn extract_json(raw: &str) -> &str {
+pub(crate) fn extract_json(raw: &str) -> &str {
     let s = raw.trim();
     if let Some(start) = s.find("```") {
         let after = &s[start + 3..];
