@@ -5,7 +5,7 @@ use okf_llm_wiki_lib::core::index_store::{rebuild_index, PersistedIndex};
 use okf_llm_wiki_lib::core::links::{
     build_link_graph, concept_refs, segment_body, BacklinkRef, GraphEdge, Segment,
 };
-use okf_llm_wiki_lib::core::provider::fake::FakeProvider;
+use okf_llm_wiki_lib::core::provider::fake::{FakeProvider, ScriptedProvider};
 use okf_llm_wiki_lib::core::retrieval::search;
 use okf_llm_wiki_lib::core::{ask::ask, digest::digest, store::OkfStore};
 
@@ -51,9 +51,10 @@ async fn full_loop_digest_then_ask() {
     let hits = search(&embedder, "vitamin d sleep", &index, 4)
         .await
         .unwrap();
-    let ap = FakeProvider {
-        reply: "Morning dose [concepts/vitamin-d-sleep.md]".into(),
-    };
+    let ap = ScriptedProvider::new(vec![
+        "Morning dose [concepts/vitamin-d-sleep.md]".into(),
+        r#"{"verdict":"accept"}"#.into(),
+    ]);
     let a = ask(&ap, "vitamin d sleep", &hits).await.unwrap();
     assert!(a.text.contains("Morning"));
     assert_eq!(a.citations, vec!["concepts/vitamin-d-sleep.md".to_string()]);
